@@ -1,0 +1,138 @@
+#pragma once
+#include <vector>
+#include <random>
+#include <mutex>
+
+
+
+
+enum class activationType : uint8_t {
+	other = 0,
+	linear = 1,
+	sigmoid = 2,
+	swish = 3
+
+};
+
+typedef float (*activationFunc)(float);
+
+struct NNActivation {
+	activationFunc func;
+	activationType actType;
+	NNActivation(activationType p_actType);
+	NNActivation(activationFunc p_func);
+};
+
+
+
+//also takes care of initialization
+class NNInitialization {
+public:
+	static std::default_random_engine engine;
+	static void seedEngine();
+	
+	enum initType_t {
+		He
+	}initType;
+
+
+	float generateRandomNumber(float fan);
+};
+
+//for mutations
+struct LearningSchedule {
+	float learningRate = 0.001;
+	std::uniform_real_distribution<float> dist = std::uniform_real_distribution<float>(-0.01,0.01);
+	float generateRandomNumber();
+};
+
+
+typedef std::vector<size_t> Topology;
+
+
+struct Layer {
+	//first index is the receiving neuron, second is the index of the providing neuron.
+	std::vector<std::vector<float>> weights;
+	std::vector<float> biases;
+	NNActivation act;
+	bool isOutput;
+	size_t size;
+	size_t prevSize;
+
+	void randomizeParameters(LearningSchedule &ls);
+	Layer(NNInitialization& init, size_t p_size, size_t p_incoming, bool p_isOutput = false, NNActivation p_act = NNActivation(activationType::swish));
+	Layer();
+};
+
+//contains all the weights for a layer in a 1d vector, biases in the next vector and extra information like activation function in the size_t*
+typedef std::tuple<float*,float*, unsigned int*> GPUDataLayer;
+
+class NeuralNetwork
+{
+private:
+	std::vector<Layer> m_hiddenLayers;
+	Layer m_outputLayer;
+	
+
+	//used for backpropagation
+	std::vector<std::vector<float*>> m_savedZValues;
+	std::vector<std::vector<float*>> m_savedAValues;
+	mutable std::vector<std::vector<float*>>  m_intermediateZValues;
+	mutable std::vector<std::vector<float*>> m_intermediateAValues;
+	mutable size_t m_instanceN = 0;
+	mutable size_t m_instancesInBatch = 0;
+	size_t m_batchN = 0;
+	bool m_recording = false;
+
+
+	Topology m_top;
+	LearningSchedule m_learningSched;
+	NNActivation m_act;
+
+	std::vector<GPUDataLayer> m_GPULayers;
+
+	void m_updateGPUMem();
+
+	void m_updateRAM();
+
+	void m_initializeGpuMem();
+
+public:
+
+	NeuralNetwork(Topology top, NNInitialization init, LearningSchedule ls ,NNActivation act = NNActivation(activationType::swish));
+	//deserializing function
+	NeuralNetwork(const std::string& str);
+
+	void addRandomWeights();
+
+	NeuralNetwork(const NeuralNetwork&);
+	friend void swap(NeuralNetwork& first, NeuralNetwork& second) {
+		std::swap(first.m_GPULayers, second.m_GPULayers);
+		std::swap(first.m_top, second.m_top);
+		std::swap(first.m_learningSched,second.m_learningSched);
+		std::swap(first.m_act, second.m_act);
+		std::swap(first.m_hiddenLayers, second.m_hiddenLayers);
+		std::swap(first.m_outputLayer, second.m_outputLayer);
+		std::swap(first.m_batchN, second.m_batchN);
+	}
+	NeuralNetwork &operator=(NeuralNetwork);
+
+
+	void backpropagateGPU(std::vector<std::vector<float>> &dCost_dOutput_forInstances);
+	void startRecording();
+	void endRecording();
+	//select a specific training instance recorded between startRecording and endRecording to be saved.
+	void selectAndDiscardRest(unsigned int selected);
+	void clearTrainingData();
+
+	//sets the input layer to the passed values, pass them through the entire neural net, and get a vector of outputs.
+	std::vector<float> forwardPassCPU(const std::vector<float> &input)const;
+	//only works when testing, cannot save training values.
+	std::vector<float> forwardPassGPU(const std::vector<float> &input)const;
+
+
+	std::string serialize()const;
+
+	~NeuralNetwork();
+
+};

@@ -43,6 +43,7 @@ public:
 //for mutations
 struct LearningSchedule {
 	float learningRate = 0.01;
+	float momentum = 0.9;
 	std::uniform_real_distribution<float> dist = std::uniform_real_distribution<float>(-learningRate,learningRate);
 	float getLearningRate(size_t epoch = 0);
 	float generateRandomNumber();
@@ -66,7 +67,7 @@ struct Layer {
 	Layer();
 };
 
-//contains all the weights for a layer in a 1d vector, biases in the next vector and extra information like activation function in the size_t*
+//contains all the weights for a layer in a 1d array, biases in the next array and extra information like activation function in the size_t*
 typedef std::tuple<float*,float*, unsigned int*> GPUDataLayer;
 
 class NeuralNetwork
@@ -92,6 +93,8 @@ private:
 	NNActivation m_act;
 
 	std::vector<GPUDataLayer> m_GPULayers;
+	//contains the momentum of each parameter(first weights and second biases) in each layer.
+	std::vector<std::pair<float*, float*>> m_GPUMomentum;
 
 	void m_updateGPUMem();
 

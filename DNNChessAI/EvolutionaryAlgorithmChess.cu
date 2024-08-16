@@ -20,7 +20,7 @@ int main()
 {
     MNISTTest test1(MNIST_DEFAULT_TOPOLOGY, R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_train.csv)", R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_test.csv)");
 
-    test1.train(20);
+    test1.train(40);
 
     std::cout << test1.test() << std::endl;
 

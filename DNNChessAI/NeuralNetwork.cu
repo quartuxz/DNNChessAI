@@ -56,6 +56,31 @@ void NeuralNetwork::m_initializeGpuMem()
 			fprintf(stderr, "cudaMalloc failed!");
 		}
 		m_GPULayers.push_back(data);
+
+		std::pair<float*, float*> data2 = std::pair<float*, float*>(0, 0);
+
+		cudaStatus = cudaMalloc((void**)&std::get<0>(data2), allSynapsesSize * sizeof(float));
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMalloc failed!");
+		}
+		
+
+		cudaStatus = cudaMemset(std::get<0>(data2),0, allSynapsesSize * sizeof(float));
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMemset failed!");
+		}
+		cudaStatus = cudaMalloc((void**)&std::get<1>(data2), layer->size * sizeof(float));
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMalloc failed!");
+		}
+
+		cudaStatus = cudaMemset(std::get<1>(data2), 0, layer->size * sizeof(float));
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMemset failed!");
+		}
+
+		m_GPUMomentum.push_back(data2);
+
 	}
 }
 
@@ -237,19 +262,23 @@ __global__ void calculateWeightGradientsKernel(float *weightMatrixAcc, const flo
 }
 
 //TODO: implement adam optimizer.
-__global__ void addAverageWeightsAndBiasesKernel(float *weights, const float *weightsAcc, float *biases, const float *biasesAcc,const float* instancesAndLearningRate,const unsigned int* extraParams) {
+//currently uses Momentum+SGD
+__global__ void addAverageWeightsAndBiasesKernel(float *weights, const float *weightsAcc, float *biases, const float *biasesAcc,const float* instancesAndLearningRate,const unsigned int* extraParams, float*momentumWeights,float* momentumBiases) {
 	int neuron = threadIdx.x + blockDim.x * blockIdx.x;
 	if (neuron < extraParams[2]) {
 		for (size_t i = 0; i < extraParams[1]; i++) {
-			weights[i + neuron * extraParams[1]] -= instancesAndLearningRate[1]*(weightsAcc[i + neuron * extraParams[1]]/instancesAndLearningRate[0]);
+			momentumWeights[i + neuron * extraParams[1]] = instancesAndLearningRate[2] * momentumWeights[i + neuron * extraParams[1]] - instancesAndLearningRate[1] * (weightsAcc[i + neuron * extraParams[1]] / instancesAndLearningRate[0]);
+			weights[i + neuron * extraParams[1]] += momentumWeights[i + neuron * extraParams[1]];
 		}
-		biases[neuron] -= instancesAndLearningRate[1] * (biases[neuron] / instancesAndLearningRate[0]);
+		momentumBiases[neuron] = instancesAndLearningRate[2] * momentumBiases[neuron] - instancesAndLearningRate[1] * (biasesAcc[neuron] / instancesAndLearningRate[0]);
+		biases[neuron] += momentumBiases[neuron];
 	}
 }
 
 
 void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, size_t epoch, size_t numberOfStreams)
 {
+
 	m_instancesInBatch = 0;
 	std::vector<float*> weightAcc;
 	std::vector<float*> biasAcc;
@@ -413,15 +442,16 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 	}
 	dCost_dErrorL.clear();
 
-	float* instancesAndLearningRate = new float[2];
+	float* instancesAndLearningRate = new float[3];
 	instancesAndLearningRate[0] = dCost_dOutput_forInstances.size();
 	instancesAndLearningRate[1] = m_learningSched.getLearningRate(epoch);
+	instancesAndLearningRate[2] = m_learningSched.momentum;
 	float *instancesAndLearningRateGPU=0;
-	cudaStatus = cudaMalloc((void**)&instancesAndLearningRateGPU, 2* sizeof(float));
+	cudaStatus = cudaMalloc((void**)&instancesAndLearningRateGPU, 3* sizeof(float));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed!");
 	}
-	cudaStatus = cudaMemcpy(instancesAndLearningRateGPU, instancesAndLearningRate, 2 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaStatus = cudaMemcpy(instancesAndLearningRateGPU, instancesAndLearningRate, 3* sizeof(float), cudaMemcpyHostToDevice);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMemcpy failed!");
 	}
@@ -431,7 +461,7 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 		const Layer* layer = (i < m_hiddenLayers.size() ? &m_hiddenLayers[i] : &m_outputLayer);
 		unsigned int blockSize = std::max((unsigned int)std::ceilf(layer->size / THREADS_PER_BLOCK), (unsigned int)1);
 		unsigned int threadSize = std::min((size_t)THREADS_PER_BLOCK, layer->size);
-		addAverageWeightsAndBiasesKernel <<< blockSize, threadSize >>> (std::get<0>(m_GPULayers[i]), weightAcc[i], std::get<1>(m_GPULayers[i]), biasAcc[i], instancesAndLearningRateGPU, std::get<2>(m_GPULayers[i]));
+		addAverageWeightsAndBiasesKernel <<< blockSize, threadSize >>> (std::get<0>(m_GPULayers[i]), weightAcc[i], std::get<1>(m_GPULayers[i]), biasAcc[i], instancesAndLearningRateGPU, std::get<2>(m_GPULayers[i]), std::get<0>(m_GPUMomentum[i]), std::get<1>(m_GPUMomentum[i]));
 		// Check for any errors launching the kernel
 		cudaStatus = cudaGetLastError();
 		if (cudaStatus != cudaSuccess) {

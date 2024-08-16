@@ -84,6 +84,7 @@
     <ClInclude Include="ChessGame.cuh" />
     <ClInclude Include="json.hpp" />
     <ClInclude Include="MatchMaker.cuh" />
+    <ClInclude Include="MNISTTest.h" />
     <ClInclude Include="NeuralNetwork.cuh" />
     <ClInclude Include="NeuralNetworkTests.cuh" />
     <ClInclude Include="NNManager.cuh" />
@@ -97,6 +98,7 @@
     <CudaCompile Include="NeuralNetwork.cu">
       <FileType>Document</FileType>
     </CudaCompile>
+    <ClCompile Include="MNISTTest.cpp" />
     <ClCompile Include="NeuralNetworkTests.cu" />
     <ClCompile Include="NNManager.cu" />
     <ClCompile Include="RealGameSampler.cu" />

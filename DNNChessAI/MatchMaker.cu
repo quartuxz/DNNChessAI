@@ -68,7 +68,7 @@ gameCondition makeMoveWithNN(ChessGame &game, NeuralNetwork* nn, player whoIsPla
 		auto inputVec = getNumericRepresentationOfBoard(possibleMoves[i].first, whoIsPlayed);
 		game.addExtraInputs(inputVec,whoIsPlayed);
 		//the most computationally intensive operation.
-		ratings.push_back(nn->forwardPassGPU(inputVec)[0]);
+		ratings.push_back(nn->forwardPassGPU({ inputVec })[0][0]);
 		 e_sum += std::exp(ratings.back());
 	}
 

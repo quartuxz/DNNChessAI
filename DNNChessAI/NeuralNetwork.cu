@@ -6,7 +6,7 @@
 #include <iostream>
 
 
-#include "cuda_runtime.h"
+
 #include "device_launch_parameters.h"
 
 #include <stdio.h>
@@ -89,7 +89,6 @@ Topology getTopology(const std::string& str) {
 		}
 		if (current == ' ') {
 			retval.push_back(std::atoi(currentNumber.c_str()));
-			std::cout << currentNumber << std::endl;
 			currentNumber = "";
 			continue;
 		}
@@ -249,7 +248,7 @@ __global__ void addAverageWeightsAndBiasesKernel(float *weights, const float *we
 }
 
 
-void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances)
+void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, size_t epoch, size_t numberOfStreams)
 {
 	m_instancesInBatch = 0;
 	std::vector<float*> weightAcc;
@@ -311,29 +310,43 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 	}
 
 
-	for (size_t i = 0; i < dCost_dOutput_forInstances.size();i++) {
-		//reverse order, last layer first
-		std::vector<float*> dCost_dErrorL;
-		dCost_dErrorL.push_back(0);
-		cudaStatus = cudaMalloc((void**)&dCost_dErrorL.back(), dCost_dOutput_forInstances[i].size() * sizeof(float));
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMalloc failed!, dCost_dErrorL, backpropagateGPU %s\n", cudaGetErrorString(cudaStatus));
-			system("pause");
-		}
-		cudaStatus = cudaMemcpy(dCost_dErrorL.back(), dCost_dOutput_forInstances[i].data(), dCost_dOutput_forInstances[i].size() * sizeof(float), cudaMemcpyHostToDevice);
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMemcpy failed!, dCost_dErrorL, backpropagateGPU");
-			system("pause");
-		}
+
+	std::vector<cudaStream_t> streams(dCost_dOutput_forInstances.size());
+	
+	//first axis is layer second axis is instance
+	std::vector<std::vector<float*>> dCost_dErrorL;
+	dCost_dErrorL.push_back({});
+
+	//reverse order, last layer first
+	for (int o = m_hiddenLayers.size() - 1; o >= 0; o--) {
+		dCost_dErrorL.push_back({});
+		for (size_t i = 0; i < dCost_dOutput_forInstances.size();i++) {
 
 
 
-		for (int o = m_hiddenLayers.size() - 1; o >= 0; o--) {
-			float* nextZError = dCost_dErrorL.back();
-			Layer* nextLayer = o == m_hiddenLayers.size() ? &m_outputLayer : &m_hiddenLayers[o+1];
 
-			dCost_dErrorL.push_back(0);
-			cudaStatus = cudaMalloc((void**)&dCost_dErrorL.back(), m_hiddenLayers[o].size * sizeof(float));
+			if (o == m_hiddenLayers.size() - 1) {
+				//initialize streams
+				cudaStreamCreate(&streams[i]);
+
+				//initialize output layer errors
+				dCost_dErrorL[0].push_back(0);
+				cudaStatus = cudaMalloc((void**)&dCost_dErrorL[0].back(), dCost_dOutput_forInstances[i].size() * sizeof(float));
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMalloc failed!, dCost_dErrorL, backpropagateGPU %s\n", cudaGetErrorString(cudaStatus));
+					system("pause");
+				}
+				cudaStatus = cudaMemcpy(dCost_dErrorL[0].back(), dCost_dOutput_forInstances[i].data(), dCost_dOutput_forInstances[i].size() * sizeof(float), cudaMemcpyHostToDevice);
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMemcpy failed!, dCost_dErrorL, backpropagateGPU");
+					system("pause");
+				}
+			}
+
+			//error in the next layer for the current instance
+			float* nextZError = dCost_dErrorL[(m_hiddenLayers.size() - 1)-o][i];
+			dCost_dErrorL.back().push_back(0);
+			cudaStatus = cudaMalloc((void**)&dCost_dErrorL.back().back(), m_hiddenLayers[o].size * sizeof(float));
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMalloc failed!, dCost_dErrorL, loop 2, backpropagateGPU, %s\n", cudaGetErrorString(cudaStatus));
 				system("pause");
@@ -346,7 +359,7 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 
 			// Launch a kernel on the GPU with one thread for each element.
 			//accumulate biases for this instance
-			calculateZErrorKernel <<< blockSize, threadSize >>> (dCost_dErrorL.back(), biasAcc[o], m_savedZValues[i][o + 1], m_savedAValues[i][o + 1], nextZError, std::get<0>(m_GPULayers[o + 1]), std::get<2>(m_GPULayers[o]), std::get<2>(m_GPULayers[o + 1]));
+			calculateZErrorKernel <<< blockSize, threadSize, 0, streams[i] >>> (dCost_dErrorL.back().back(), biasAcc[o], m_savedZValues[i][o + 1], m_savedAValues[i][o + 1], nextZError, std::get<0>(m_GPULayers[o + 1]), std::get<2>(m_GPULayers[o]), std::get<2>(m_GPULayers[o + 1]));
 
 			// Check for any errors launching the kernel
 			cudaStatus = cudaGetLastError();
@@ -355,15 +368,8 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 				system("pause");
 			}
 
-			// cudaDeviceSynchronize waits for the kernel to finish, and returns
-			// any errors encountered during the launch.
-			cudaStatus = cudaDeviceSynchronize();
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching calculateZErrorKernel!\n", cudaStatus);
-				system("pause");
-			}
 			//accumulate weights for this instance
-			calculateWeightGradientsKernel <<< blockSize, threadSize >>> (weightAcc[o], dCost_dErrorL.back(), m_savedAValues[i][o], std::get<2>(m_GPULayers[o]));
+			calculateWeightGradientsKernel <<< blockSize, threadSize, 0, streams[i] >>> (weightAcc[o], dCost_dErrorL.back().back(), m_savedAValues[i][o], std::get<2>(m_GPULayers[o]));
 
 			// Check for any errors launching the kernel
 			cudaStatus = cudaGetLastError();
@@ -372,24 +378,44 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 				system("pause");
 			}
 
-			// cudaDeviceSynchronize waits for the kernel to finish, and returns
-			// any errors encountered during the launch.
-			cudaStatus = cudaDeviceSynchronize();
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching calculateWeightGradientsKernel!\n", cudaStatus);
-				system("pause");
+
+			if (i%numberOfStreams == numberOfStreams -1) {
+				// cudaDeviceSynchronize waits for the kernel to finish, and returns
+				// any errors encountered during the launch.
+				cudaStatus = cudaDeviceSynchronize();
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching calculateWeightGradientsKernel and other!\n", cudaStatus);
+					system("pause");
+				}
 			}
 		}
-
-		for (auto dError : dCost_dErrorL) {
-			cudaFree(dError);
+		// cudaDeviceSynchronize waits for the kernel to finish, and returns
+		// any errors encountered during the launch.
+		cudaStatus = cudaDeviceSynchronize();
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching calculateWeightGradientsKernel and other!\n", cudaStatus);
+			system("pause");
 		}
 
+		for (auto instance: dCost_dErrorL[(m_hiddenLayers.size() - 1) - o]) {
+			cudaFree(instance);
+		}
 	}
+
+	for (auto stream : streams) {
+		cudaStreamDestroy(stream);
+	}
+
+	streams.clear();
+
+	for (auto instance : dCost_dErrorL.back()) {
+		cudaFree(instance);
+	}
+	dCost_dErrorL.clear();
 
 	float* instancesAndLearningRate = new float[2];
 	instancesAndLearningRate[0] = dCost_dOutput_forInstances.size();
-	instancesAndLearningRate[1] = m_learningSched.learningRate;
+	instancesAndLearningRate[1] = m_learningSched.getLearningRate(epoch);
 	float *instancesAndLearningRateGPU=0;
 	cudaStatus = cudaMalloc((void**)&instancesAndLearningRateGPU, 2* sizeof(float));
 	if (cudaStatus != cudaSuccess) {
@@ -453,28 +479,34 @@ void NeuralNetwork::endRecording()
 
 }
 
-void NeuralNetwork::selectAndDiscardRest(unsigned int selected)
+void NeuralNetwork::selectAndDiscardRest(unsigned int selected, bool selectAll)
 {
 	m_instancesInBatch++;
 
-	m_savedAValues.push_back(m_intermediateAValues[selected]);
-	m_savedZValues.push_back(m_intermediateZValues[selected]);
+	if (selectAll) {
+		m_savedAValues.insert(m_savedAValues.end(),m_intermediateAValues.begin(), m_intermediateAValues.end());
+		m_savedZValues.insert(m_savedZValues.end(), m_intermediateZValues.begin(), m_intermediateZValues.end());
+	} else {
+		m_savedAValues.push_back(m_intermediateAValues[selected]);
+		m_savedZValues.push_back(m_intermediateZValues[selected]);
 
 
-	for (size_t i = 0; i < m_intermediateAValues.size(); i++) {
-		if (i != selected) {
-			for (auto val : m_intermediateAValues[i]) {
-				cudaFree(val);
+		for (size_t i = 0; i < m_intermediateAValues.size(); i++) {
+			if (i != selected) {
+				for (auto val : m_intermediateAValues[i]) {
+					cudaFree(val);
+				}
+			}
+		}
+		for (size_t i = 0; i < m_intermediateZValues.size(); i++) {
+			if (i != selected) {
+				for (auto val : m_intermediateZValues[i]) {
+					cudaFree(val);
+				}
 			}
 		}
 	}
-	for (size_t i = 0; i < m_intermediateZValues.size(); i++) {
-		if (i != selected) {
-			for (auto val : m_intermediateZValues[i]) {
-				cudaFree(val);
-			}
-		}
-	}
+
 
 
 	m_intermediateAValues.clear();
@@ -663,72 +695,203 @@ void NeuralNetwork::m_updateRAM()
 
 
 
-std::vector<float> NeuralNetwork::forwardPassGPU(const std::vector<float>& input) const
+std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<std::vector<float>>& input, size_t numberOfStreams) const
 {
 
-	if (m_top[0] != input.size()) {
-		std::stringstream ss;
-		ss << "input layer is not the same size as the parameters passed: " << m_top[0] << " vs " << input.size() << std::endl;
-		throw std::invalid_argument(ss.str());
+
+	//for (auto in : input) {
+	//	if (m_top[0] != in.size()) {
+	//		std::stringstream ss;
+	//		ss << "input layer is not the same size as the parameters passed: " << m_top[0] << " vs " << input.size() << std::endl;
+	//		throw std::invalid_argument(ss.str());
+	//	}
+	//}
+
+	//cudaError_t cudaStatus;
+
+	//// Choose which GPU to run on, change this on a multi-GPU system.
+	//cudaStatus = cudaSetDevice(0);
+	//if (cudaStatus != cudaSuccess) {
+	//	fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
+	//}
+	//std::vector<std::vector<float>> retval(input.size());
+
+	//for (size_t o = 0; o < input.size(); o++) {
+	//	float* inputGPU = 0;
+	//	cudaStatus = cudaMalloc((void**)&inputGPU, input[o].size() * sizeof(float));
+	//	if (cudaStatus != cudaSuccess) {
+	//		fprintf(stderr, "cudaMalloc failed!");
+	//	}
+
+
+	//	cudaStatus = cudaMemcpy(inputGPU, input[o].data(), input[o].size() * sizeof(float), cudaMemcpyHostToDevice);
+	//	if (cudaStatus != cudaSuccess) {
+	//		fprintf(stderr, "cudaMemcpy failed!");
+	//	}
+
+	//	//start recording a new  instance of intermediate values, first entry in  the instance is the input.
+	//	if (m_recording) {
+	//		m_intermediateAValues.push_back({});
+	//		m_intermediateZValues.push_back({});
+	//		m_instanceN++;
+	//		float* zValues = 0;
+	//		cudaStatus = cudaMalloc((void**)&zValues, input[o].size() * sizeof(float));
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaMalloc failed!");
+	//		}
+
+
+	//		float* aValues = 0;
+	//		cudaStatus = cudaMalloc((void**)&aValues, input[o].size() * sizeof(float));
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaMalloc failed!");
+	//		}
+
+	//		cudaStatus = cudaMemcpy(zValues, input[o].data(), input[o].size() * sizeof(float), cudaMemcpyHostToDevice);
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaMemcpy failed!");
+	//		}
+
+	//		cudaStatus = cudaMemcpy(aValues, input[o].data(), input[o].size() * sizeof(float), cudaMemcpyHostToDevice);
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaMemcpy failed!");
+	//		}
+
+	//		m_intermediateAValues.back().push_back(aValues);
+	//		m_intermediateZValues.back().push_back(zValues);
+	//	}
+
+
+
+	//	for (size_t i = 0; i < m_hiddenLayers.size() + 1; i++) {
+
+	//		const Layer* layer;
+	//		if (i < m_hiddenLayers.size()) {
+	//			layer = &m_hiddenLayers[i];
+	//		}
+	//		else {
+	//			layer = &m_outputLayer;
+	//		}
+
+	//		float* zValues = 0;
+
+	//		cudaStatus = cudaMalloc((void**)&zValues, layer->size * sizeof(float));
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaMalloc failed!");
+	//		}
+
+	//		float* output = 0;
+
+	//		cudaStatus = cudaMalloc((void**)&output, layer->size * sizeof(float));
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaMalloc failed!");
+	//		}
+
+
+
+	//		unsigned int blockSize = std::max((unsigned int)std::ceilf(layer->size / THREADS_PER_BLOCK), (unsigned int)1);
+	//		unsigned int threadSize = std::min((size_t)THREADS_PER_BLOCK, layer->size);
+	//		forwardPassLayerKernel << < blockSize, threadSize >> > (zValues, output, inputGPU, std::get<0>(m_GPULayers[i]), std::get<1>(m_GPULayers[i]), std::get<2>(m_GPULayers[i]));
+
+	//		if (m_recording) {
+	//			m_intermediateAValues.back().push_back(output);
+	//			m_intermediateZValues.back().push_back(zValues);
+	//		}
+	//		else {
+	//			cudaFree(zValues);
+	//		}
+
+
+	//		// Check for any errors launching the kernel
+	//		cudaStatus = cudaGetLastError();
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "processLayerKernel launch failed: %s%s\n", cudaGetErrorString(cudaStatus));
+	//			system("pause");
+	//		}
+
+	//		// cudaDeviceSynchronize waits for the kernel to finish, and returns
+	//		// any errors encountered during the launch.
+	//		cudaStatus = cudaDeviceSynchronize();
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching processLayerKernel!\n", cudaStatus);
+	//		}
+
+
+
+
+	//		if (i == m_hiddenLayers.size()) {
+	//			cudaFree(inputGPU);
+	//			float* out = new float[layer->size];
+	//			// Copy output vector from GPU buffer to host memory.
+	//			cudaStatus = cudaMemcpy(out, output, layer->size * sizeof(float), cudaMemcpyDeviceToHost);
+	//			if (cudaStatus != cudaSuccess) {
+	//				fprintf(stderr, "cudaMemcpy failed!");
+	//			}
+	//			if (!m_recording) {
+	//				cudaFree(output);
+	//			}
+
+
+	//			retval[o] = std::vector<float>(out, out + layer->size);
+	//			delete out;
+	//			break;
+	//		}
+	//		else {
+	//			cudaFree(inputGPU);
+
+	//			cudaStatus = cudaMalloc((void**)&inputGPU, layer->size * sizeof(float));
+	//			if (cudaStatus != cudaSuccess) {
+	//				fprintf(stderr, "cudaMalloc failed!");
+	//			}
+	//			cudaStatus = cudaMemcpy(inputGPU, output, layer->size * sizeof(float), cudaMemcpyDeviceToDevice);
+	//			if (cudaStatus != cudaSuccess) {
+	//				fprintf(stderr, "cudaMemcpy failed!");
+	//			}
+	//		}
+
+	//		cudaStatus = cudaDeviceSynchronize();
+	//		if (cudaStatus != cudaSuccess) {
+	//			fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching processLayerKernel!\n", cudaStatus);
+	//		}
+
+	//		if (!m_recording) {
+	//			cudaStatus = cudaFree(output);
+	//			if (cudaStatus != cudaSuccess) {
+	//				fprintf(stderr, "cudaFree failed!");
+	//			}
+	//		}
+	//	}
+	//}
+	//
+	//return retval;
+
+
+	for (auto in : input) {
+		if (m_top[0] != in.size()) {
+			std::stringstream ss;
+			ss << "input layer is not the same size as the parameters passed: " << m_top[0] << " vs " << input.size() << std::endl;
+			throw std::invalid_argument(ss.str());
+		}
 	}
+
 
 
 	cudaError_t cudaStatus;
 
-	// Choose which GPU to run on, change this on a multi-GPU system.
 	cudaStatus = cudaSetDevice(0);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
 	}
 
-	float* inputGPU = 0;
-	cudaStatus = cudaMalloc((void**)&inputGPU, input.size() * sizeof(float));
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaMalloc failed!");
-	}
 
 
-	cudaStatus = cudaMemcpy(inputGPU, input.data(), input.size() * sizeof(float), cudaMemcpyHostToDevice);
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaMemcpy failed!");
-	}
+	std::vector<float*> inputGPU(input.size());
+	std::vector<float*> output(input.size());
 
-	//start recording a new  instance of intermediate values, first entry in  the instance is the input.
-	if (m_recording) {
-		m_intermediateAValues.push_back({});
-		m_intermediateZValues.push_back({});
-		m_instanceN++;
-		float* zValues = 0;
-		cudaStatus = cudaMalloc((void**)&zValues, input.size() * sizeof(float));
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMalloc failed!");
-		}
-
-
-		float* aValues = 0;
-		cudaStatus = cudaMalloc((void**)&aValues, input.size() * sizeof(float));
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMalloc failed!");
-		}
-
-		cudaStatus = cudaMemcpy(zValues, input.data(), input.size() * sizeof(float), cudaMemcpyHostToDevice);
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMemcpy failed!");
-		}
-
-		cudaStatus = cudaMemcpy(aValues, input.data(), input.size() * sizeof(float), cudaMemcpyHostToDevice);
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMemcpy failed!");
-		}
-
-		m_intermediateAValues.back().push_back(aValues);
-		m_intermediateZValues.back().push_back(zValues);
-	}
-
+	std::vector<cudaStream_t> streams(input.size());
 
 
 	for (size_t i = 0; i < m_hiddenLayers.size() + 1; i++) {
-
 		const Layer* layer;
 		if (i < m_hiddenLayers.size()) {
 			layer = &m_hiddenLayers[i];
@@ -737,40 +900,100 @@ std::vector<float> NeuralNetwork::forwardPassGPU(const std::vector<float>& input
 			layer = &m_outputLayer;
 		}
 
-		float* zValues = 0;
 
-		cudaStatus = cudaMalloc((void**)&zValues, layer->size * sizeof(float));
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMalloc failed!");
-		}
+		for (size_t o = 0; o < input.size(); o++) {
 
-		float* output = 0;
+			if (i == 0) {
 
-		cudaStatus = cudaMalloc((void**)&output, layer->size * sizeof(float));
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaMalloc failed!");
-		}
+				cudaStreamCreate(&streams[o]);
+
+				cudaStatus = cudaMalloc((void**)&inputGPU[o], input[o].size() * sizeof(float));
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMalloc failed!");
+				}
 
 
+				cudaStatus = cudaMemcpy(inputGPU[o], input[o].data(), input[o].size() * sizeof(float), cudaMemcpyHostToDevice);
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMemcpy failed!");
+				}
 
-		unsigned int blockSize = std::max((unsigned int)std::ceilf(layer->size/THREADS_PER_BLOCK), (unsigned int)1);
-		unsigned int threadSize = std::min((size_t)THREADS_PER_BLOCK,layer->size);
-		forwardPassLayerKernel<<< blockSize, threadSize >>>(zValues,output, inputGPU, std::get<0>(m_GPULayers[i]), std::get<1>(m_GPULayers[i]), std::get<2>(m_GPULayers[i]));
+				//start recording a new  instance of intermediate values, first entry in the instance is the input.
+				if (m_recording) {
+					m_intermediateAValues.push_back({});
+					m_intermediateZValues.push_back({});
+					m_instanceN++;
+					float* zValues = 0;
+					cudaStatus = cudaMalloc((void**)&zValues, input[o].size() * sizeof(float));
+					if (cudaStatus != cudaSuccess) {
+						fprintf(stderr, "cudaMalloc failed!");
+					}
 
-		if (m_recording) {
-			m_intermediateAValues.back().push_back(output);
-			m_intermediateZValues.back().push_back(zValues);
-		}
-		else {
-			cudaFree(zValues);
-		}
+
+					float* aValues = 0;
+					cudaStatus = cudaMalloc((void**)&aValues, input[o].size() * sizeof(float));
+					if (cudaStatus != cudaSuccess) {
+						fprintf(stderr, "cudaMalloc failed!");
+					}
+
+					cudaStatus = cudaMemcpy(zValues, input[o].data(), input[o].size() * sizeof(float), cudaMemcpyHostToDevice);
+					if (cudaStatus != cudaSuccess) {
+						fprintf(stderr, "cudaMemcpy failed!");
+					}
+
+					cudaStatus = cudaMemcpy(aValues, input[o].data(), input[o].size() * sizeof(float), cudaMemcpyHostToDevice);
+					if (cudaStatus != cudaSuccess) {
+						fprintf(stderr, "cudaMemcpy failed!");
+					}
+
+					m_intermediateAValues.back().push_back(aValues);
+					m_intermediateZValues.back().push_back(zValues);
+				}
+			}
 
 
-		// Check for any errors launching the kernel
-		cudaStatus = cudaGetLastError();
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "processLayerKernel launch failed: %s%s\n", cudaGetErrorString(cudaStatus));
-			system("pause");
+			float* zValues = 0;
+
+			cudaStatus = cudaMalloc((void**)&zValues, layer->size * sizeof(float));
+			if (cudaStatus != cudaSuccess) {
+				fprintf(stderr, "cudaMalloc failed!");
+			}
+
+
+
+			cudaStatus = cudaMalloc((void**)&output[o], layer->size * sizeof(float));
+			if (cudaStatus != cudaSuccess) {
+				fprintf(stderr, "cudaMalloc failed!");
+			}
+
+
+
+			unsigned int blockSize = std::max((unsigned int)std::ceilf(layer->size/THREADS_PER_BLOCK), (unsigned int)1);
+			unsigned int threadSize = std::min((size_t)THREADS_PER_BLOCK,layer->size);
+			forwardPassLayerKernel<<< blockSize, threadSize,0,streams[o] >> >(zValues, output[o], inputGPU[o], std::get<0>(m_GPULayers[i]), std::get<1>(m_GPULayers[i]), std::get<2>(m_GPULayers[i]));
+
+			if (m_recording && i < m_hiddenLayers.size()) {
+				m_intermediateAValues[o].push_back(output[o]);
+				m_intermediateZValues[o].push_back(zValues);
+			}
+			else {
+				cudaFree(zValues);
+			}
+
+
+			// Check for any errors launching the kernel
+			cudaStatus = cudaGetLastError();
+			if (cudaStatus != cudaSuccess) {
+				fprintf(stderr, "processLayerKernel launch failed: %s%s\n", cudaGetErrorString(cudaStatus));
+				system("pause");
+			}
+
+			if (o%numberOfStreams== numberOfStreams-1) {
+				cudaStatus = cudaDeviceSynchronize();
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching processLayerKernel!\n", cudaStatus);
+				}
+			}
 		}
 
 		// cudaDeviceSynchronize waits for the kernel to finish, and returns
@@ -780,44 +1003,59 @@ std::vector<float> NeuralNetwork::forwardPassGPU(const std::vector<float>& input
 			fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching processLayerKernel!\n", cudaStatus);
 		}
 
+		std::vector<std::vector<float>> retval(input.size());
+		for (size_t o = 0; o < input.size(); o++) {
+			if (i >= m_hiddenLayers.size()) {
+				cudaFree(inputGPU[o]);
+				float* out = new float[layer->size];
+				// Copy output vector from GPU buffer to host memory.
+				cudaStatus = cudaMemcpy(out, output[o], layer->size * sizeof(float), cudaMemcpyDeviceToHost);
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMemcpy failed!");
+				}
 
+				retval[o].insert(retval[o].begin(),out,out+layer->size);
 
+				if (m_recording) {
+					cudaStatus = cudaFree(output[o]);
+					if (cudaStatus != cudaSuccess) {
+						fprintf(stderr, "cudaFree failed!");
+					}
+				}
 
-		if (i == m_hiddenLayers.size()) {
-			cudaFree(inputGPU);
-			float* out = new float[layer->size];
-			// Copy output vector from GPU buffer to host memory.
-			cudaStatus = cudaMemcpy(out, output, layer->size * sizeof(float), cudaMemcpyDeviceToHost);
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed!");
+				delete out;
+
+			}
+			else {
+				cudaFree(inputGPU[o]);
+
+				cudaStatus = cudaMalloc((void**)&inputGPU[o], layer->size * sizeof(float));
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMalloc failed!");
+				}
+				cudaStatus = cudaMemcpy(inputGPU[o], output[o], layer->size * sizeof(float), cudaMemcpyDeviceToDevice);
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaMemcpy failed!");
+				}
 			}
 			if (!m_recording) {
-				cudaFree(output);
+				cudaStatus = cudaFree(output[o]);
+				if (cudaStatus != cudaSuccess) {
+					fprintf(stderr, "cudaFree failed!");
+				}
+			}
+		}
+		if (i >= m_hiddenLayers.size()) {
+
+			for (auto stream: streams) {
+				cudaStreamDestroy(stream);
 			}
 
-
-			std::vector<float> retval = std::vector<float>(out, out + layer->size);
-			delete out;
 			return retval;
-		}
-		else {
-			cudaFree(inputGPU);
-
-			cudaStatus = cudaMalloc((void**)&inputGPU, layer->size * sizeof(float));
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMalloc failed!");
-			}
-			cudaStatus = cudaMemcpy(inputGPU, output, layer->size * sizeof(float), cudaMemcpyDeviceToDevice);
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed!");
-			}
-		}
-		if (!m_recording) {
-			cudaFree(output);
 		}
 	}
 
-	return std::vector<float>();
+	return std::vector<std::vector<float>>();
 }
 
 
@@ -959,6 +1197,11 @@ NNActivation::NNActivation(activationFunc p_func)
 	func = p_func;
 }
 
+
+float LearningSchedule::getLearningRate(size_t epoch)
+{
+	return learningRate * pow(0.1,epoch/20);
+}
 
 float LearningSchedule::generateRandomNumber()
 {

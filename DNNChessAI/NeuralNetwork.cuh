@@ -2,7 +2,8 @@
 #include <vector>
 #include <random>
 #include <mutex>
-
+#define CUDA_API_PER_THREAD_DEFAULT_STREAM
+#include "cuda_runtime.h"
 
 
 
@@ -41,8 +42,9 @@ public:
 
 //for mutations
 struct LearningSchedule {
-	float learningRate = 0.001;
-	std::uniform_real_distribution<float> dist = std::uniform_real_distribution<float>(-0.01,0.01);
+	float learningRate = 0.01;
+	std::uniform_real_distribution<float> dist = std::uniform_real_distribution<float>(-learningRate,learningRate);
+	float getLearningRate(size_t epoch = 0);
 	float generateRandomNumber();
 };
 
@@ -118,17 +120,17 @@ public:
 	NeuralNetwork &operator=(NeuralNetwork);
 
 
-	void backpropagateGPU(std::vector<std::vector<float>> &dCost_dOutput_forInstances);
+	void backpropagateGPU(std::vector<std::vector<float>> &dCost_dOutput_forInstances, size_t epoch = 0,size_t numberOfStreams = 1);
 	void startRecording();
 	void endRecording();
 	//select a specific training instance recorded between startRecording and endRecording to be saved.
-	void selectAndDiscardRest(unsigned int selected);
+	void selectAndDiscardRest(unsigned int selected, bool selectAll = false);
 	void clearTrainingData();
 
-	//sets the input layer to the passed values, pass them through the entire neural net, and get a vector of outputs.
-	std::vector<float> forwardPassCPU(const std::vector<float> &input)const;
 	//only works when testing, cannot save training values.
-	std::vector<float> forwardPassGPU(const std::vector<float> &input)const;
+	std::vector<float> forwardPassCPU(const std::vector<float> &input)const;
+	//receives a batch of inputs, passes them through the entire neural net, and gets a batch of outputs.
+	std::vector<std::vector<float>> forwardPassGPU(const std::vector<std::vector<float>> &input, size_t numberOfStreams = 1)const;
 
 
 	std::string serialize()const;

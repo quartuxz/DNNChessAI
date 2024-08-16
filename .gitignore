@@ -364,3 +364,4 @@ FodyWeavers.xsd
 
 DNNChessAI/lichess_db_eval.jsonl
 DNNChessAI/kernel.cu
+DNNChessAI/MINST/*

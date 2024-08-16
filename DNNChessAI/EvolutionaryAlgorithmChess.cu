@@ -8,6 +8,8 @@
 #include "NeuralNetwork.cuh"
 #include "MatchMaker.cuh"
 #include "NNManager.cuh"
+#include "MNISTTest.h"
+
 
 
 #include "cuda_runtime.h"
@@ -16,6 +18,13 @@
 //
 int main()
 {
+    MNISTTest test1(MNIST_DEFAULT_TOPOLOGY, R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_train.csv)", R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_test.csv)");
+
+    test1.train(20);
+
+    std::cout << test1.test() << std::endl;
+
+    return 0;
     NNManager NNs;
     int optionSelected = 1;
     size_t usedThreads = 1;

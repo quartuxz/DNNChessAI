@@ -13,7 +13,7 @@ gameCondition matchTwoNNs(ChessGame& game, NeuralNetwork* black, NeuralNetwork* 
 {
 	
 	gameCondition retval = gameCondition::playing;
-	player whoToPlay = player::white;
+	player whoToPlay = game.getWhoToPlay();
 	while (true) {
 
 		//std::cout << TextUIChess::getBoardString(game->getCurrentBoard(),TextUIChess::boardDisplayType::mayusMinus) << std::endl;
@@ -125,7 +125,7 @@ gameCondition makeMoveWithNN(ChessGame &game, NeuralNetwork* nn, player whoIsPla
 }
 
 MatchMaker::MatchMaker():
-	m_gameSampler(R"(C:\Users\Administrator\Desktop\c++\EvolutionaryChess\EvolutionaryChess\lichess_db_eval.jsonl)")
+	m_gameSampler(R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\lichess_db_eval.jsonl)")
 {
 }
 
@@ -149,6 +149,11 @@ MatchMaker::MatchMaker(std::vector<NeuralNetwork*> initialNNs, Topology top):
 	{
 		m_competitors.push_back(std::make_pair(initialNNs[i],0));
 	}
+}
+
+void MatchMaker::setGamesPerEpoch(size_t games)
+{
+	m_targetGamesPerEpoch = games;
 }
 
 size_t MatchMaker::getMaxThreads() const
@@ -180,7 +185,7 @@ void addScores(std::vector<std::pair<NeuralNetwork*, size_t>>& m_competitors, si
 	}
 }
 
-void matchMakeThreadedOnce(Match &match,std::vector<std::pair<NeuralNetwork*, size_t>>& m_competitors, std::mutex &matchesLock, bool backpropagationTraining = true) {
+void matchMakeThreadedOnce(Match &match,std::vector<std::pair<NeuralNetwork*, size_t>>& m_competitors, std::mutex &matchesLock, bool backpropagationTraining = true, size_t epoch = 0, size_t targetBatchSize = 1024 ) {
 	
 	matchesLock.lock();
 	auto blackNN = m_competitors[match.black].first;
@@ -219,7 +224,14 @@ void matchMakeThreadedOnce(Match &match,std::vector<std::pair<NeuralNetwork*, si
 			costDerivWhite.push_back({ (whiteProbas[i].first - expectedWhite) });
 		}
 
-		whiteNN->backpropagateGPU(costDerivWhite);
+		if (!costDerivWhite.empty()) {
+			auto acc = whiteNN->accumulateInstanceForBackprop(costDerivWhite);
+			if (acc >= targetBatchSize) {
+				whiteNN->backpropagateGPU();
+			}
+
+		}
+
 
 
 		std::vector < std::vector<float> > costDerivBlack;
@@ -230,8 +242,13 @@ void matchMakeThreadedOnce(Match &match,std::vector<std::pair<NeuralNetwork*, si
 			}
 			costDerivBlack.push_back({ (blackProbas[i].first - expectedBlack) });
 		}
+		if (!costDerivBlack.empty()) {
+			auto acc = blackNN->accumulateInstanceForBackprop(costDerivBlack);
+			if (acc >= targetBatchSize) {
+				blackNN->backpropagateGPU();
+			}
+		}
 
-		blackNN->backpropagateGPU(costDerivBlack);
 		matchesLock.unlock();
 	}
 
@@ -247,7 +264,7 @@ void matchMakeThreadedOnce(Match &match,std::vector<std::pair<NeuralNetwork*, si
 }
 
 
-void matchMakeThreaded(std::stack<Match>& matches, std::vector<std::pair<NeuralNetwork*, size_t>> &m_competitors, std::mutex &matchesLock) {
+void matchMakeThreaded(std::stack<Match>& matches, std::vector<std::pair<NeuralNetwork*, size_t>> &m_competitors, std::mutex &matchesLock,bool backpropagationTraining = true, size_t epoch = 0, size_t targetBatchSize = 1024) {
 	
 	//std::cout << "-";
 	while (true) {
@@ -269,7 +286,7 @@ void matchMakeThreaded(std::stack<Match>& matches, std::vector<std::pair<NeuralN
 
 
 
-		matchMakeThreadedOnce(thisMatch, m_competitors,matchesLock);
+		matchMakeThreadedOnce(thisMatch, m_competitors,matchesLock,backpropagationTraining,epoch,targetBatchSize);
 	}
 }
 
@@ -303,7 +320,7 @@ std::vector<NeuralNetwork*> MatchMaker::getNNs()
 	return retval;
 }
 
-void MatchMaker::matchMake()
+void MatchMaker::matchMake(bool backpropagationTraining)
 {
 	if (MatchMaker::verboseOutputAndTracking) {
 		std::cout << "start of matchmake" << std::endl;
@@ -318,10 +335,13 @@ void MatchMaker::matchMake()
 	std::mutex matchesLock;
 
 	std::vector<ChessGame> selectedGames;
-	for (auto& criteria: m_selectionCriteria) {
-		selectedGames.push_back(m_gameSampler.sampleGame(criteria,RealGameSampler::leastDepth));
-	
+	for (size_t i = 0; i < m_targetGamesPerEpoch/m_selectionCriteria.size(); i++) {
+		for (auto& criteria : m_selectionCriteria) {
+			//selectedGames.push_back(ChessGame());
+			selectedGames.push_back(m_gameSampler.sampleGame(criteria, RealGameSampler::leastDepth));
+		}
 	}
+
 
 	//matches are made, care is taken to not match NNs against themselves.
 	for (size_t i = 0; i < m_initialNNs; i++)
@@ -351,7 +371,7 @@ void MatchMaker::matchMake()
 	if (m_maxThreads != 1) {
 		for (size_t o = 0; o < m_maxThreads; o++) {
 			//matchMakeThread(matches,m_competitors,matchesLock,competitorsLock);
-			workers.push_back(new std::thread([&, o]() {matchMakeThreaded(matches, m_competitors, matchesLock); }));
+			workers.push_back(new std::thread([&, o]() {matchMakeThreaded(matches, m_competitors, matchesLock,backpropagationTraining,m_currentEpoch, m_targetBatchSize); }));
 		}
 
 		for (size_t i = 0; i < workers.size(); i++) {
@@ -360,16 +380,24 @@ void MatchMaker::matchMake()
 		}
 	}
 	else {
-		matchMakeThreaded(matches, m_competitors, matchesLock);
+		matchMakeThreaded(matches, m_competitors, matchesLock,backpropagationTraining,m_currentEpoch,m_targetBatchSize);
+	}
+
+	//we do this to ensure instances that were computed but exceeded the the last batch max are backpropagated.
+	for (auto comp : m_competitors) {
+		
+		comp.first->backpropagateGPU();
+		comp.first->increaseEpoch();
 	}
 
 
-
-
 	
+	m_currentEpoch++;
 
 
 	END_CHRONO_LOG
+
+
 
 	/*
 	auto start = std::chrono::high_resolution_clock::now();

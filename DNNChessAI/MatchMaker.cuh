@@ -8,7 +8,7 @@
 #include "NeuralNetwork.cuh"
 #include "RealGameSampler.cuh"
 
-#define QEAC_DEFAULT_TOPOLOGY {838,8192,8192,8192,8192,8192,8192,1}
+#define QEAC_DEFAULT_TOPOLOGY {838,1000,10,1}
 //#define QEAC_DEFAULT_TOPOLOGY {838,8192,8192,1}
 
 struct Match {
@@ -40,6 +40,9 @@ private:
 	NNInitialization m_initialRandStrat = NNInitialization();
 	LearningSchedule m_learningSchedule = LearningSchedule();
 	RealGameSampler m_gameSampler;
+	size_t m_targetBatchSize = 1024;
+	size_t m_targetGamesPerEpoch = 5000;
+	size_t  m_currentEpoch = 0;
 
 	MatchMaker();
 
@@ -54,6 +57,8 @@ public:
 	MatchMaker(std::vector<NeuralNetwork*> initialNNs, Topology defaultTop = QEAC_DEFAULT_TOPOLOGY);
 
 
+	void setGamesPerEpoch(size_t games);
+
 	size_t getMaxThreads()const;
 	void setMaxThreads(size_t maxThreads);
 
@@ -61,7 +66,7 @@ public:
 
 	std::string getScoresStrings()const noexcept;
 
-	void matchMake();
+	void matchMake(bool backpropagationTraining = true);
 
 	void sortNNs();
 

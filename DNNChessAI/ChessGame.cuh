@@ -100,6 +100,7 @@ private:
 public:
 
 
+	player getWhoToPlay()const;
 
 	bool getRepeatedPosition()const noexcept;
 

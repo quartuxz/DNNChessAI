@@ -9,21 +9,27 @@
 #include "MatchMaker.cuh"
 #include "NNManager.cuh"
 #include "MNISTTest.h"
-
-
+#include "ConnectFourTest.h"
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+
+bool MNIST_TEST() {
+    auto mnist = MNISTTest(MNIST_DEFAULT_TOPOLOGY, R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_train.csv)", R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_test.csv)");
+
+    mnist.train(5);
+    return mnist.test()>0.94;
+}
+
 //
 int main()
 {
-    MNISTTest test1(MNIST_DEFAULT_TOPOLOGY, R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_train.csv)", R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_test.csv)");
-
-    test1.train(40);
-
-    std::cout << test1.test() << std::endl;
-
+    auto c4 = ConnectFourTest(C4_DEFAULT_TOPOLOGY, 2);
+    c4.train(150,5000);
+    //auto c4 = ConnectFourTest({"C4TEST_0.txt", "C4TEST_1.txt"});
+    std::cout <<  c4.test(1000);
+    c4.save("C4TEST");
     return 0;
     NNManager NNs;
     int optionSelected = 1;

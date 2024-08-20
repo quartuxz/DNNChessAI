@@ -524,6 +524,11 @@ std::vector<boardAndPreviousMove> ChessGame::m_getPossibleMovesForBoard(const bo
     return allMoves;
 }
 
+player ChessGame::getWhoToPlay() const
+{
+    return m_whoToPlay;
+}
+
 bool ChessGame::getRepeatedPosition() const noexcept
 {
     return m_repeatedPosition;

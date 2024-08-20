@@ -12,9 +12,9 @@ private:
 	int movesToMate = -1;
 	centipawnsOrMate(float cp, int moves);
 public:
+	centipawnsOrMate() = delete;
 	static centipawnsOrMate makeMovesToMate(int moves);
 	static centipawnsOrMate makeCentipawns(float centipawns);
-	centipawnsOrMate();
 };
 
 typedef std::pair<centipawnsOrMate, centipawnsOrMate> scoreRange;

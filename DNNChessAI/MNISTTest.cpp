@@ -78,6 +78,8 @@ std::vector<std::vector<float>> MNISTTest::m_forwardPropagate(std::vector<instan
 MNISTTest::MNISTTest(Topology top, std::string trainFileCSV, std::string testFileCSV):
 	m_dense(top,NNInitialization(),LearningSchedule())
 {
+	m_dense.m_learningSched.useWarmup = false;
+
 	m_parseCSVInstances(m_trainingInstances,trainFileCSV);
 	m_parseCSVInstances(m_testingInstances,testFileCSV);
 }
@@ -130,8 +132,9 @@ void MNISTTest::train(size_t epochs)
 			}
 			m_dense.selectAndDiscardRest(0,true);
 			m_dense.endRecording();
-			m_dense.backpropagateGPU(results,o,100);
+			m_dense.backpropagateGPU(results);
 		}
+		m_dense.increaseEpoch();
 	}
 
 

@@ -82,6 +82,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ChessGame.cuh" />
+    <ClInclude Include="ConnectFourTest.h" />
     <ClInclude Include="json.hpp" />
     <ClInclude Include="MatchMaker.cuh" />
     <ClInclude Include="MNISTTest.h" />
@@ -93,6 +94,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ChessGame.cu" />
+    <ClCompile Include="ConnectFourTest.cpp" />
     <ClCompile Include="EvolutionaryAlgorithmChess.cu" />
     <ClCompile Include="MatchMaker.cu" />
     <CudaCompile Include="NeuralNetwork.cu">

@@ -40,9 +40,16 @@ public:
 	float generateRandomNumber(float fan);
 };
 
-//for mutations
+
 struct LearningSchedule {
-	float learningRate = 0.01;
+	float learningRate =            0.01;
+	float initialLearningRate =     0.001;
+	float warmupIncrementPerEpoch = 0.001;
+	float linearDecreasePerEpoch =  0.00005;
+	bool useWarmup = true;
+	bool useLinearDecrease = false;
+	bool constantLearningRate = false;
+	float learningRateDecreaseFactor = 20;
 	float momentum = 0.9;
 	std::uniform_real_distribution<float> dist = std::uniform_real_distribution<float>(-learningRate,learningRate);
 	float getLearningRate(size_t epoch = 0);
@@ -87,10 +94,14 @@ private:
 	size_t m_batchN = 0;
 	bool m_recording = false;
 
+	std::vector<std::vector<float>> m_accumulatedInstancesForBP;
+
 
 	Topology m_top;
-	LearningSchedule m_learningSched;
+
 	NNActivation m_act;
+
+	size_t m_epoch = 0;
 
 	std::vector<GPUDataLayer> m_GPULayers;
 	//contains the momentum of each parameter(first weights and second biases) in each layer.
@@ -103,15 +114,21 @@ private:
 	void m_initializeGpuMem();
 
 public:
+	LearningSchedule m_learningSched;
+
 
 	NeuralNetwork(Topology top, NNInitialization init, LearningSchedule ls ,NNActivation act = NNActivation(activationType::swish));
 	//deserializing function
 	NeuralNetwork(const std::string& str);
 
+	size_t accumulateInstanceForBackprop(const std::vector<std::vector<float>> &instaceOutputDif);
+
 	void addRandomWeights();
 
-	NeuralNetwork(const NeuralNetwork&);
+	NeuralNetwork(NeuralNetwork&);
 	friend void swap(NeuralNetwork& first, NeuralNetwork& second) {
+		first.m_updateRAM();
+		second.m_updateRAM();
 		std::swap(first.m_GPULayers, second.m_GPULayers);
 		std::swap(first.m_top, second.m_top);
 		std::swap(first.m_learningSched,second.m_learningSched);
@@ -123,7 +140,14 @@ public:
 	NeuralNetwork &operator=(NeuralNetwork);
 
 
-	void backpropagateGPU(std::vector<std::vector<float>> &dCost_dOutput_forInstances, size_t epoch = 0,size_t numberOfStreams = 1);
+	void increaseEpoch();
+	void setEpoch(size_t epoch);
+	size_t getEpoch()const;
+
+	//numberOfStreams is the synchronization upper bound not the exact value
+	void backpropagateGPU(std::vector<std::vector<float>> &dCost_dOutput_forInstances, size_t numberOfStreams = 64);
+	//uses saved values for each instance
+	void backpropagateGPU(size_t numberOfStreams = 64);
 	void startRecording();
 	void endRecording();
 	//select a specific training instance recorded between startRecording and endRecording to be saved.
@@ -131,12 +155,13 @@ public:
 	void clearTrainingData();
 
 	//only works when testing, cannot save training values.
-	std::vector<float> forwardPassCPU(const std::vector<float> &input)const;
+	std::vector<float> forwardPassCPU(const std::vector<float> &input);
 	//receives a batch of inputs, passes them through the entire neural net, and gets a batch of outputs.
-	std::vector<std::vector<float>> forwardPassGPU(const std::vector<std::vector<float>> &input, size_t numberOfStreams = 1)const;
+	//numberOfStreams is the synchronization upper bound not the exact value
+	std::vector<std::vector<float>> forwardPassGPU(const std::vector<std::vector<float>> &input, size_t numberOfStreams = 128)const;
 
 
-	std::string serialize()const;
+	std::string serialize();
 
 	~NeuralNetwork();
 

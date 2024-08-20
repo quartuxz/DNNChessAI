@@ -1,6 +1,7 @@
 #include "RealGameSampler.cuh"
 #include <algorithm>
 #include <iostream>
+#include <stdexcept>
 #include "json.hpp"
 
 
@@ -24,14 +25,14 @@ centipawnsOrMate centipawnsOrMate::makeCentipawns(float centipawns)
 	return centipawnsOrMate(centipawns,-1);
 }
 
-centipawnsOrMate::centipawnsOrMate()
-{
-}
 
 RealGameSampler::RealGameSampler(const std::string& motherFile):
 	m_file(motherFile),
 	m_motherFile(motherFile)
 {
+	if (!m_file.good()) {
+		throw std::invalid_argument("file with chess games does not exist!");
+	}
 	m_file.seekg(0, m_file.end);
 	m_fileLength = m_file.tellg();
 	m_file.seekg(0, m_file.beg);
@@ -41,7 +42,7 @@ RealGameSampler::RealGameSampler(const std::string& motherFile):
 
 }
 
-ChessGame RealGameSampler::sampleGame(const std::pair<centipawnsOrMate, centipawnsOrMate>& centipawnRange, selection sel)
+ChessGame RealGameSampler::sampleGame(const scoreRange& centipawnRange, selection sel)
 {
 	m_file.open(m_motherFile);
 	while (true) {

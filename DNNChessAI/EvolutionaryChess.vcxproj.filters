@@ -1,0 +1,69 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="NeuralNetwork.cu" />
+    <CudaCompile Include="kernel.cu">
+      <Filter>imported</Filter>
+    </CudaCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="EvolutionaryAlgorithmChess.cu" />
+    <ClCompile Include="NeuralNetworkTests.cu" />
+    <ClCompile Include="NNManager.cu" />
+    <ClCompile Include="MNISTTest.cpp">
+      <Filter>tests</Filter>
+    </ClCompile>
+    <ClCompile Include="ChessGame.cu">
+      <Filter>chess</Filter>
+    </ClCompile>
+    <ClCompile Include="RealGameSampler.cu">
+      <Filter>chess</Filter>
+    </ClCompile>
+    <ClCompile Include="TextUIChess.cu">
+      <Filter>chess</Filter>
+    </ClCompile>
+    <ClCompile Include="MatchMaker.cu">
+      <Filter>chess</Filter>
+    </ClCompile>
+    <ClCompile Include="ConnectFourTest.cpp">
+      <Filter>tests</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="NeuralNetwork.cuh" />
+    <ClInclude Include="NeuralNetworkTests.cuh" />
+    <ClInclude Include="NNManager.cuh" />
+    <ClInclude Include="MNISTTest.h">
+      <Filter>tests</Filter>
+    </ClInclude>
+    <ClInclude Include="ChessGame.cuh">
+      <Filter>chess</Filter>
+    </ClInclude>
+    <ClInclude Include="RealGameSampler.cuh">
+      <Filter>chess</Filter>
+    </ClInclude>
+    <ClInclude Include="TextUIChess.cuh">
+      <Filter>chess</Filter>
+    </ClInclude>
+    <ClInclude Include="json.hpp">
+      <Filter>imported</Filter>
+    </ClInclude>
+    <ClInclude Include="MatchMaker.cuh">
+      <Filter>chess</Filter>
+    </ClInclude>
+    <ClInclude Include="ConnectFourTest.h">
+      <Filter>tests</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="tests">
+      <UniqueIdentifier>{47d4b71c-8523-47b5-b0dc-d0d6e511215e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="chess">
+      <UniqueIdentifier>{58590f06-39e4-4e2e-b7dd-a9e08fc1e446}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="imported">
+      <UniqueIdentifier>{eda2563d-9e9d-4241-80c4-6167a823f889}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

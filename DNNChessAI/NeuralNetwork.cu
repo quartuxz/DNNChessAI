@@ -103,14 +103,44 @@ NeuralNetwork::NeuralNetwork(Topology top, NNInitialization init, LearningSchedu
 }
 
 
+size_t getEpochFStr(const std::string &str) {
+	std::string currentNumber;
+	
+	size_t retval;
+
+	for (char current : str) {
+		if (current == '\n') {
+			break;
+		}
+		if (current == ' ') {
+			retval = std::atoi(currentNumber.c_str());
+			currentNumber = "";
+			continue;
+		}
+		else {
+			currentNumber.push_back(current);
+		}
+
+	}
+	return retval;
+}
+
 Topology getTopology(const std::string& str) {
 	std::string currentNumber;
 
 	Topology retval;
 
+	size_t line = 0;
+
 	for (char current : str) {
 		if (current == '\n') {
-			break;
+			if (line == 1) {
+				break;
+			}
+			line++;
+		}
+		if (line != 1) {
+			continue;
 		}
 		if (current == ' ') {
 			retval.push_back(std::atoi(currentNumber.c_str()));
@@ -128,6 +158,7 @@ Topology getTopology(const std::string& str) {
 NeuralNetwork::NeuralNetwork(const std::string& str) :
 	NeuralNetwork(getTopology(str),NNInitialization(),LearningSchedule())
 {
+	m_epoch = getEpochFStr(str);
 	std::string currentNumber;
 
 	std::vector<Layer*> allLayers;
@@ -146,13 +177,13 @@ NeuralNetwork::NeuralNetwork(const std::string& str) :
 	for (char current : str) {
 		//the first line was already read for topology information.
 		if (current == '\n') {
-			if (line >= 1) {
+			if (line >= 2) {
 				break;
 			}
 			line++;
 			continue;
 		}
-		if (line < 1) {
+		if (line < 2) {
 			continue;
 		}
 		
@@ -187,6 +218,14 @@ NeuralNetwork::NeuralNetwork(const std::string& str) :
 	m_updateGPUMem();
 }
 
+size_t NeuralNetwork::accumulateInstanceForBackprop(const std::vector<std::vector<float>>& instaceOutputDif)
+{
+
+	m_accumulatedInstancesForBP.insert(m_accumulatedInstancesForBP.end(), instaceOutputDif.begin(), instaceOutputDif.end());
+
+	return m_accumulatedInstancesForBP.size();
+}
+
 
 
 void NeuralNetwork::addRandomWeights()
@@ -207,14 +246,17 @@ void NeuralNetwork::addRandomWeights()
 	m_updateGPUMem();
 }
 
-NeuralNetwork::NeuralNetwork(const NeuralNetwork &other):
-	m_outputLayer(other.m_outputLayer),
+
+NeuralNetwork::NeuralNetwork(NeuralNetwork &other):
 	m_act(other.m_act),
-	m_hiddenLayers(other.m_hiddenLayers),
 	m_learningSched(other.m_learningSched),
 	m_top(other.m_top),
 	m_batchN(other.m_batchN)
 {
+	std::cout << "USED NN COPY CONSTRUCTOR!" << std::endl;
+	other.m_updateRAM();
+	m_hiddenLayers = other.m_hiddenLayers;
+	m_outputLayer = other.m_outputLayer;
 	m_initializeGpuMem();
 	m_updateGPUMem();
 }
@@ -276,10 +318,31 @@ __global__ void addAverageWeightsAndBiasesKernel(float *weights, const float *we
 }
 
 
-void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, size_t epoch, size_t numberOfStreams)
+void NeuralNetwork::increaseEpoch()
+{
+	m_epoch++;
+}
+
+void NeuralNetwork::setEpoch(size_t epoch)
+{
+	m_epoch = epoch;
+}
+
+size_t NeuralNetwork::getEpoch() const
+{
+	return m_epoch;
+}
+
+void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, size_t numberOfStreams)
 {
 
 	m_instancesInBatch = 0;
+
+
+	if (dCost_dOutput_forInstances.empty()) {
+		return;
+	}
+
 	std::vector<float*> weightAcc;
 	std::vector<float*> biasAcc;
 
@@ -444,7 +507,7 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 
 	float* instancesAndLearningRate = new float[3];
 	instancesAndLearningRate[0] = dCost_dOutput_forInstances.size();
-	instancesAndLearningRate[1] = m_learningSched.getLearningRate(epoch);
+	instancesAndLearningRate[1] = m_learningSched.getLearningRate(m_epoch);
 	instancesAndLearningRate[2] = m_learningSched.momentum;
 	float *instancesAndLearningRateGPU=0;
 	cudaStatus = cudaMalloc((void**)&instancesAndLearningRateGPU, 3* sizeof(float));
@@ -479,11 +542,9 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 		
 	}
 
+	delete instancesAndLearningRate;
 	cudaFree(instancesAndLearningRateGPU);
 
-
-
-	m_updateRAM();
 
 	for (auto weight : weightAcc) {
 		cudaFree(weight);
@@ -494,6 +555,12 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 
 	clearTrainingData();
 	m_batchN++;
+}
+
+void NeuralNetwork::backpropagateGPU( size_t numberOfStreams)
+{
+	backpropagateGPU(m_accumulatedInstancesForBP,numberOfStreams);
+
 }
 
 void NeuralNetwork::startRecording()
@@ -546,6 +613,7 @@ void NeuralNetwork::selectAndDiscardRest(unsigned int selected, bool selectAll)
 
 void NeuralNetwork::clearTrainingData()
 {
+	m_accumulatedInstancesForBP.clear();
 	for (auto& layer : m_savedAValues) {
 		for (auto val : layer) {
 			cudaFree(val);
@@ -563,8 +631,9 @@ void NeuralNetwork::clearTrainingData()
 
 #include <sstream>
 
-std::vector<float> NeuralNetwork::forwardPassCPU(const std::vector<float>& input) const
+std::vector<float> NeuralNetwork::forwardPassCPU(const std::vector<float>& input)
 {
+	m_updateRAM();
 	if (m_top[0] != input.size()) {
 		std::stringstream ss;
 		ss << "input layer is not the same size as the parameters passed: " << m_top[0] << " vs " << input.size() << std::endl;
@@ -920,6 +989,7 @@ std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<
 
 	std::vector<cudaStream_t> streams(input.size());
 
+	size_t initialIntermediateInstanceSize = m_intermediateAValues.size();
 
 	for (size_t i = 0; i < m_hiddenLayers.size() + 1; i++) {
 		const Layer* layer;
@@ -933,6 +1003,7 @@ std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<
 
 		for (size_t o = 0; o < input.size(); o++) {
 
+			
 			if (i == 0) {
 
 				cudaStreamCreate(&streams[o]);
@@ -1003,8 +1074,17 @@ std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<
 			forwardPassLayerKernel<<< blockSize, threadSize,0,streams[o] >> >(zValues, output[o], inputGPU[o], std::get<0>(m_GPULayers[i]), std::get<1>(m_GPULayers[i]), std::get<2>(m_GPULayers[i]));
 
 			if (m_recording && i < m_hiddenLayers.size()) {
-				m_intermediateAValues[o].push_back(output[o]);
-				m_intermediateZValues[o].push_back(zValues);
+				//for when a single instance is passed
+				if (input.size() == 1) {
+					m_intermediateAValues.back().push_back(output[o]);
+					m_intermediateZValues.back().push_back(zValues);
+				}
+				//for when a batch is passed
+				else {
+					m_intermediateAValues[o+initialIntermediateInstanceSize].push_back(output[o]);
+					m_intermediateZValues[o+initialIntermediateInstanceSize].push_back(zValues);
+				}
+
 			}
 			else {
 				cudaFree(zValues);
@@ -1090,10 +1170,11 @@ std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<
 
 
 
-std::string NeuralNetwork::serialize()const
+std::string NeuralNetwork::serialize()
 {
-
+	m_updateRAM();
 	std::stringstream ss;
+	ss << m_epoch << " " << std::endl;
 	for (auto x : m_top)
 	{
 		ss << x << " ";
@@ -1230,7 +1311,32 @@ NNActivation::NNActivation(activationFunc p_func)
 
 float LearningSchedule::getLearningRate(size_t epoch)
 {
-	return learningRate * pow(0.1,epoch/20);
+	if (constantLearningRate) {
+		return learningRate;
+	}
+	float warmupLRate = initialLearningRate + epoch * warmupIncrementPerEpoch;
+	float retval;
+	if (useLinearDecrease) {
+		retval = std::max(initialLearningRate, learningRate-epoch*linearDecreasePerEpoch);
+	} else{
+		retval = learningRate * pow(0.1, epoch / learningRateDecreaseFactor);
+	}
+
+
+	if (useWarmup && warmupLRate < learningRate) {
+		return warmupLRate;
+	}
+
+	if (useWarmup && !useLinearDecrease) {
+		return learningRate * pow(0.1, (epoch - ((learningRate - initialLearningRate) / warmupIncrementPerEpoch)) / learningRateDecreaseFactor);
+	}
+
+	if (useLinearDecrease && useWarmup) {
+		return std::max(initialLearningRate, learningRate - (epoch - ((learningRate - initialLearningRate) / warmupIncrementPerEpoch)) * linearDecreasePerEpoch);
+	}
+
+	return retval;
+
 }
 
 float LearningSchedule::generateRandomNumber()

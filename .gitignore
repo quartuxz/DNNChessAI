@@ -365,3 +365,5 @@ FodyWeavers.xsd
 DNNChessAI/lichess_db_eval.jsonl
 DNNChessAI/kernel.cu
 DNNChessAI/MINST/*
+/DNNChessAI/C4TEST_0.txt
+/DNNChessAI/C4TEST_1.txt

@@ -83,6 +83,7 @@
   <ItemGroup>
     <ClInclude Include="ChessGame.cuh" />
     <ClInclude Include="ConnectFourTest.h" />
+    <ClInclude Include="DefsAndUtils.h" />
     <ClInclude Include="json.hpp" />
     <ClInclude Include="MatchMaker.cuh" />
     <ClInclude Include="MNISTTest.h" />

@@ -54,6 +54,7 @@
     <ClInclude Include="ConnectFourTest.h">
       <Filter>tests</Filter>
     </ClInclude>
+    <ClInclude Include="DefsAndUtils.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="tests">

@@ -2,7 +2,6 @@
 #include <vector>
 #include <random>
 #include <mutex>
-#define CUDA_API_PER_THREAD_DEFAULT_STREAM
 #include "cuda_runtime.h"
 
 

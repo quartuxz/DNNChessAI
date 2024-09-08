@@ -28,6 +28,12 @@
     <ClCompile Include="ConnectFourTest.cpp">
       <Filter>tests</Filter>
     </ClCompile>
+    <ClCompile Include="SamplingVector.cpp">
+      <Filter>generic</Filter>
+    </ClCompile>
+    <ClCompile Include="DefsAndUtils.cpp">
+      <Filter>generic</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="NeuralNetwork.cuh" />
@@ -54,7 +60,12 @@
     <ClInclude Include="ConnectFourTest.h">
       <Filter>tests</Filter>
     </ClInclude>
-    <ClInclude Include="DefsAndUtils.h" />
+    <ClInclude Include="DefsAndUtils.h">
+      <Filter>generic</Filter>
+    </ClInclude>
+    <ClInclude Include="SamplingVector.h">
+      <Filter>generic</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="tests">
@@ -65,6 +76,9 @@
     </Filter>
     <Filter Include="imported">
       <UniqueIdentifier>{eda2563d-9e9d-4241-80c4-6167a823f889}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="generic">
+      <UniqueIdentifier>{7bb2fbbf-2208-46e1-a8e4-97b92b7514e3}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

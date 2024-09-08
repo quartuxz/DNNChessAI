@@ -19,7 +19,7 @@
 bool MNIST_TEST() {
     auto mnist = MNISTTest(MNIST_DEFAULT_TOPOLOGY, R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_train.csv)", R"(C:\Users\Administrator\Desktop\c++\DNNChessAI\DNNChessAI\MINST\mnist_test.csv)");
     START_CHRONO
-    mnist.train(5);
+    mnist.train(100);
     END_CHRONO_LOG
     std::cout << mnist.test();
     return mnist.test()>0.94;
@@ -28,13 +28,19 @@ bool MNIST_TEST() {
 //
 int main()
 {
-    MNIST_TEST();
-    return 0;
-    auto c4 = ConnectFourTest({"C4TEST_0.txt", "C4TEST_1.txt"});
-    //c4.train(150,5000);
-    //auto c4 = ConnectFourTest({"C4TEST_0.txt", "C4TEST_1.txt"});
-    std::cout <<  c4.test(100);
-    //c4.save("C4TEST");
+
+    //MNIST_TEST();
+    //return 0;
+
+    //auto c4 = ConnectFourTest();
+    auto c4 = ConnectFourTest();
+    c4.setSaveFile("nn_v1");
+    //c4.play();
+    //std::cout << c4.test(100);
+    c4.train(100,10000);
+    //auto c4 = ConnectFourTest("C4TEST_0.txt");
+    std::cout <<  c4.test(1000);
+    c4.save();
     return 0;
     NNManager NNs;
     int optionSelected = 1;

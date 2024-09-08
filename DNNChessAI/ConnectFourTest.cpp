@@ -16,8 +16,6 @@ HAS SOME MODIFICATIONS
 
 #include "ConnectFourTest.h"
 
-#define min(a,b) (((a) < (b)) ? (a) : (b))
-#define max(a,b) (((a) > (b)) ? (a) : (b))
 
 // function declarations
 void printBoard(const boardC4_t&);
@@ -25,12 +23,13 @@ int userMove(boardC4_t&);
 void makeMove(boardC4_t&, int, unsigned int);
 void errorMessage(int);
 int aiMove(boardC4_t&, unsigned int,unsigned int);
-bool winningMove(boardC4_t&, unsigned int);
+bool winningMove(const boardC4_t&, unsigned int);
 int scoreSet(std::vector<unsigned int>, unsigned int);
 int tabScore(const boardC4_t&, unsigned int);
 std::array<int, 2> miniMax(boardC4_t &,unsigned int, unsigned int, int, int, unsigned int);
 int heurFunction(unsigned int, unsigned int, unsigned int);
 void initBoard(boardC4_t&);
+std::vector<boardC4_t> getPossibleMoves(boardC4_t& board, playerC4 whoIsPlayed);
 
 // I'll be real and say this is just to avoid magic numbers
 unsigned int NUM_COL = 7; // how wide is the board
@@ -66,7 +65,7 @@ void playGame() {
 		else if (currentPlayer == PLAYER) { // playerC4 move
 			makeMove(board, userMove(board), PLAYER);
 		}
-		else if (turns == NUM_ROW * NUM_COL) { // if max number of turns reached
+		else if (turns == NUM_ROW * NUM_COL) { // if std::max number of turns reached
 			gameOver = true;
 		}
 		gameOver = winningMove(board, currentPlayer); // check if playerC4 won
@@ -90,6 +89,14 @@ void playGame() {
  * @param p - the current playerC4
  */
 void makeMove(boardC4_t& b, int c, unsigned int p) {
+	if (c == -1) {
+		for (unsigned int c = 0; c < NUM_COL; c++) { // for each possible move
+			if (b[NUM_ROW - 1][c] == 0) { // but only if that column is non-full
+				makeMove(b,c,p);
+				return;
+			}
+		}
+	}
 	// start from bottom of board going up
 	for (unsigned int r = 0; r < NUM_ROW; r++) {
 		if (b[r][c] == 0) { // first available spot
@@ -173,7 +180,7 @@ std::array<int, 2> miniMax(boardC4_t& b,unsigned int turns, unsigned int d, int 
 				if (score > moveSoFar[0]) { // if better score, replace it, and consider that best move (for now)
 					moveSoFar = { score, (int)c };
 				}
-				alf = max(alf, moveSoFar[0]);
+				alf = std::max(alf, moveSoFar[0]);
 				if (alf >= bet) { break; } // for pruning
 			}
 		}
@@ -192,7 +199,7 @@ std::array<int, 2> miniMax(boardC4_t& b,unsigned int turns, unsigned int d, int 
 				if (score < moveSoFar[0]) {
 					moveSoFar = { score, (int)c };
 				}
-				bet = min(bet, moveSoFar[0]);
+				bet = std::min(bet, moveSoFar[0]);
 				if (alf >= bet) { break; }
 			}
 		}
@@ -306,10 +313,10 @@ int heurFunction(unsigned int g, unsigned int b, unsigned int z) {
 /**
  * function to determine if a winning move is made
  * @param b - the board to check
- * @param p - the playerC4 to check against
- * @return - whether that playerC4 won
+ * @param p - the player to check against
+ * @return - whether that player won
  */
-bool winningMove(boardC4_t& b, unsigned int p) {
+bool winningMove(const boardC4_t& b, unsigned int p) {
 	unsigned int winSequence = 0; // to count adjacent pieces
 	// for horizontal checks
 	for (unsigned int c = 0; c < NUM_COL - 3; c++) { // for each column
@@ -471,6 +478,11 @@ struct MatchC4 {
 	boardC4_t gameState;
 };
 
+
+playerC4 flipPlayerC4(playerC4 player) {
+	return player == playerC4::first ? playerC4::second : playerC4::first;
+}
+
 std::vector<float> getNumericRepresentationOfBoard(boardC4_t& board, playerC4 p_whoIsPlayed) {
 	unsigned int whoIsPlayed = (unsigned int)p_whoIsPlayed;
 	std::vector<float> rep;
@@ -548,15 +560,496 @@ skipLoops:
 	return retval;
 }
 
+#include <queue>
+#include "DefsAndUtils.h"
+
+//win/lose heuristic for connect four
+float minimalC4Heuristic(const boardC4_t &brd, playerC4 plr) {
+	//testing custom heuristic
+	//return float(tabScore(brd, unsigned int(plr)))/100;
+	return winningMove(brd, unsigned int(plr)) ? 1.0f : 0.0f;
+}
+
+void ConnectFourTest::m_generateTrainingData(float difficulty, size_t amount)
+{
+	std::vector<std::pair<boardC4_t*, playerC4>> data;
+	//data processed by the neural network.
+	std::vector<std::pair<boardC4_t*, playerC4>> NNPData;
+
+	std::uniform_real_distribution<float> dist(0.0,1.0);
+	for (size_t i = 0; i < amount; i++) {
+		int diff = std::max(7 * 6 - int(difficulty),0);
+		auto brd = new boardC4_t(sampleBoard(diff));
+		auto plr = getWhoToPlay(*brd);
+		bool generateWithNN = true;
+		if (dist(*getGlobalRandomEngine())  < m_epsilon) {
+			auto pos =  getPossibleMoves(*brd,plr);
+			std::uniform_int_distribution<size_t> gameDist(0,pos.size()-1);
+			*brd = pos[gameDist(*getGlobalRandomEngine())];
+			generateWithNN = false;
+		}
+		data.push_back({ brd,plr });
+		if (generateWithNN) {
+			NNPData.push_back({ brd,plr});
+		}
+	}
+
+	m_makeMovesWithNN(NNPData);
+
+	std::vector<std::pair<connectFourPlay, float>> preparedRBEntries;
 
 
-void makeMoveWithNN(boardC4_t& game, NeuralNetwork* nn, playerC4 whoIsPlayed, bool highestProba, std::pair<float, unsigned int>* proba, bool backpropagationTraining)
+	for (auto& d : data) {
+		preparedRBEntries.push_back({ {*d.first,d.second, minimalC4Heuristic(*d.first,d.second)}, 100.0f });
+	}
+
+
+	m_replayBuffer.insert(preparedRBEntries);
+
+	for (auto d:data) {
+		delete d.first;
+	}
+
+}
+
+#include <map>
+#include <functional>
+
+void ConnectFourTest::m_minimaxNN(std::pair<boardC4_t*, playerC4> game, size_t depth, size_t turns)
+{
+	const float minScore = INT_MIN, maxScore = INT_MAX;
+	const unsigned int AIPlayer=(unsigned int)game.second, opponentPlayer = (unsigned int)flipPlayerC4(game.second);
+	std::function<std::pair<float, int>(boardC4_t&, unsigned int, unsigned int, unsigned int,float,float)> m_miniMax = [&minScore,&maxScore,&AIPlayer,&opponentPlayer,&m_miniMax,this](boardC4_t& b, unsigned int turns, unsigned int d, unsigned int p, float alf, float bet)->std::pair<float, int> {
+
+		if (d == 0 || d >= (NUM_COL * NUM_ROW) - turns) {
+			// get current score to return
+			float score = m_nn->forwardPassGPU({ getNumericRepresentationOfBoard(b,playerC4(AIPlayer)) })[0][0];
+
+			//return { tabScore(b, AIPlayer), -1 };
+			return std::pair<float, int>{score, -1};
+			
+		}
+		if (p == AIPlayer) {
+			std::pair<float, int>moveSoFar = { minScore, -1 }; // since maximizing, we want lowest possible value
+			if (winningMove(b, opponentPlayer)) {
+				return moveSoFar; // force it to say it's worst possible score, so it knows to avoid move
+			} // otherwise, business as usual
+			for (unsigned int c = 0; c < NUM_COL; c++) { // for each possible move
+				if (b[NUM_ROW - 1][c] == 0) { // but only if that column is non-full
+					boardC4_t newBoard = b;
+					makeMove(newBoard, c, p); // try the move
+					float score = m_miniMax(newBoard, turns, d - 1, opponentPlayer,alf,bet).first; // find move based on that new board state
+					//std::cout << score << std::endl;
+					if (score > moveSoFar.first) { // if better score, replace it, and consider that best move (for now)
+						moveSoFar = { score, (int)c };
+					}
+					alf = std::max(alf, moveSoFar.first);
+					if (alf >= bet) { break; } // for pruning
+				}
+			}
+			return moveSoFar; // return best possible move
+		}
+		else {
+			std::pair<float, int> moveSoFar = { maxScore, -1 };
+			if (winningMove(b, AIPlayer)) {
+				return moveSoFar; // if about to win, report that move as best
+			}
+			for (unsigned int c = 0; c < NUM_COL; c++) {
+				if (b[NUM_ROW - 1][c] == 0) {
+					boardC4_t newBoard = b;
+					makeMove(newBoard, c, p);
+					float score = m_miniMax(newBoard, turns, d - 1, AIPlayer,alf,bet).first;
+					if (score < moveSoFar.first) {
+						moveSoFar = { score, (int)c };
+					}
+					bet = std::min(bet, moveSoFar.first);
+					if (alf >= bet) { break; }
+				}
+			}
+			return moveSoFar;
+		}
+	};
+	auto res = m_miniMax(*game.first,(unsigned int)turns,(unsigned int)depth, AIPlayer,minScore, maxScore);
+
+	makeMove(*game.first,res.second, AIPlayer);
+
+
+}
+
+void ConnectFourTest::m_makeMoveWithDepthAndBreadth(std::pair<boardC4_t*, playerC4> game, size_t depth, size_t breadth, bool highestTrueSampleFalse)
 {
 
-	auto possibleMoves = getPossibleMoves(game,whoIsPlayed);
+	if (depth %2 == 0) {
+		depth++;
+	}
+
+	//first we evaluate if the game is in an end state
+	//all games that are not proceed to next step
+	std::vector < std::pair<boardC4_t*, playerC4> > candidates(breadth, {nullptr,playerC4::first});
+	std::map< size_t, size_t > candidatesOriginalCandidate;
+	std::vector< boardC4_t > originalCandidates;
+	boardC4_t bestCandidate;
+	size_t numOfCandidates = breadth;
+	for (size_t o = 0; o < depth; o++) {
+		std::vector<std::vector<connectFourPlay>> allPossiblePlays;
+		std::vector<C4PlayOGCandidate> allPossiblePlaysFlattenedFiltered;
+		if (o == 0) {
+			m_makeMovesWithNN({game},nullptr,&allPossiblePlays);
+		}
+		else {
+
+			m_makeMovesWithNN(std::vector < std::pair<boardC4_t*, playerC4> >(candidates.begin(),candidates.begin()+numOfCandidates),nullptr,&allPossiblePlays);
+			if (o % 2 == 1) {
+				for (auto& cand:candidates) {
+					cand.second = flipPlayerC4(cand.second);
+				}
+				continue;
+			}
+		}
+
+		for (size_t i = 0; i < allPossiblePlays.size(); i++) {
+			size_t cnt = 0;
+			for (auto& possiblePlay: allPossiblePlays[i]) {
+				if (o == 0) {
+					bestCandidate = possiblePlay.boardAfterPlay;
+					candidatesOriginalCandidate[cnt] = cnt;
+					cnt++;
+
+					originalCandidates.push_back(possiblePlay.boardAfterPlay);
+				}
+				if (getPossibleMoves(possiblePlay.boardAfterPlay, flipPlayerC4(possiblePlay.whoPlayed)).size() == 0) {
+
+					continue;
+				}
+				//if (winningMove(possiblePlay.boardAfterPlay,(unsigned int)game.second)) {
+				//	possiblePlay.reward = 1000;
+				//} 
+				//if (winningMove(possiblePlay.boardAfterPlay, (unsigned int)flipPlayerC4(game.second))) {
+				//	possiblePlay.reward = -1000;
+				//}
+
+				allPossiblePlaysFlattenedFiltered.push_back({ possiblePlay, candidatesOriginalCandidate[o == 0 ? cnt - 1 : i] });
+
+			}
+		}
+
+		if (allPossiblePlaysFlattenedFiltered.empty()) {
+			*game.first = bestCandidate;
+			break;
+		}
+
+		std::sort(allPossiblePlaysFlattenedFiltered.begin(),allPossiblePlaysFlattenedFiltered.end(), std::greater<C4PlayOGCandidate>());
+		numOfCandidates = std::min(size_t(breadth), allPossiblePlaysFlattenedFiltered.size());
+		for (size_t i = 0; i < numOfCandidates; i++) {
+			
+
+			if (o == 0) {
+			}
+			else {
+				if (candidates[i].first != nullptr) {
+					delete candidates[i].first;
+					candidates[i].first = nullptr;
+				}
+
+
+			}
+
+			//if (allPossiblePlaysFlattenedFiltered[i].play.reward <= -999) {
+			//	*game.first = bestCandidate;
+			//	goto breakAllC4;
+			//}
+
+			if (i==0) {
+				bestCandidate = originalCandidates[allPossiblePlaysFlattenedFiltered[i].originalCandidate];
+				if (m_tracking) {
+					std::cout << "best candidate: " << std::endl;
+					printBoard(allPossiblePlaysFlattenedFiltered[i].play.boardAfterPlay);
+				}
+
+			}
 
 
 
+			//if (allPossiblePlaysFlattenedFiltered[i].play.reward >= 999) {
+			//	*game.first = bestCandidate;
+			//	goto breakAllC4;
+			//}
+
+			candidates[i].first = new boardC4_t(allPossiblePlaysFlattenedFiltered[i].play.boardAfterPlay);
+			//we flip because the person to play is opposite the person who just played
+			candidates[i].second = flipPlayerC4(allPossiblePlaysFlattenedFiltered[i].play.whoPlayed);
+			candidatesOriginalCandidate[i] = allPossiblePlaysFlattenedFiltered[i].originalCandidate;
+
+
+		}
+
+
+		if (o == depth-1) {
+			//the first candidate has the candidatesOriginalCandidate[0] original candidate
+			//the first candidate is also the one with the highest score.
+			*game.first = bestCandidate;
+			break;
+		}
+
+		//check if all the candidates have the same original candidate.
+		bool allSameCandidate = true;
+		size_t prevCOC = candidatesOriginalCandidate[0];
+		for (auto COC : candidatesOriginalCandidate) {
+			if (COC.second  != prevCOC) {
+				allSameCandidate = false;
+			}
+		}
+
+		//impossible to branch out of the original candidates, one candidate wins, the one that is all.
+		if (allSameCandidate) {
+			*game.first = bestCandidate;
+			break;
+		}
+	}
+breakAllC4:
+	if (m_tracking) {
+		printBoard(*game.first);
+	}
+	for (auto can : candidates) {
+		if (can.first != nullptr) {
+			delete can.first;
+		}
+
+	}
+
+}
+
+
+void ConnectFourTest::m_trainOnce()
+{
+	auto samples = m_replayBuffer.popSampleN(m_batchSize);
+	auto originalSamples = samples;
+
+
+	std::vector < float > futureRewards(samples.size(),0);
+	std::vector<size_t> oppositeTurnPlaysI;
+	std::vector<std::pair<boardC4_t*, playerC4>> oppositeTurnPlays;
+	//first we evaluate if the game is in an end state
+	//all games that are not proceed to next step
+	for (size_t i = 0; i < samples.size();i++) {
+		futureRewards[i] = samples[i].data.reward;
+		//check for win(has a nonzero score) or tie(no more places to play)
+		if (getPossibleMoves(samples[i].data.boardAfterPlay, flipPlayerC4(samples[i].data.whoPlayed)).size() == 0 || winningMove(samples[i].data.boardAfterPlay,unsigned int(samples[i].data.whoPlayed))) {
+			
+			continue;
+		}
+
+		oppositeTurnPlaysI.push_back(i);
+
+		oppositeTurnPlays.push_back({&samples[i].data.boardAfterPlay,flipPlayerC4(samples[i].data.whoPlayed)});
+	}
+
+	//we evaluate the games for the opposite player
+	m_makeMovesWithNN(oppositeTurnPlays, m_targetNN);
+
+
+	std::vector<size_t> turnAfterOppositePlaysI;
+	std::vector<std::pair<boardC4_t*, playerC4>> turnAfterOppositePlays;
+
+	//then we check if the opponent's move won or tied andif not we play the final turn(original player's) next.
+	for (size_t i = 0; i < oppositeTurnPlaysI.size(); i++) {
+		auto OTPReward = minimalC4Heuristic(samples[oppositeTurnPlaysI[i]].data.boardAfterPlay, flipPlayerC4(samples[oppositeTurnPlaysI[i]].data.whoPlayed));
+		futureRewards[oppositeTurnPlaysI[i]] += -m_discount *OTPReward;
+		if (getPossibleMoves(samples[oppositeTurnPlaysI[i]].data.boardAfterPlay, samples[oppositeTurnPlaysI[i]].data.whoPlayed).size() == 0 || winningMove(samples[oppositeTurnPlaysI[i]].data.boardAfterPlay, unsigned int(flipPlayerC4(samples[oppositeTurnPlaysI[i]].data.whoPlayed)))) {
+			continue;
+		}
+		turnAfterOppositePlaysI.push_back(oppositeTurnPlaysI[i]);
+
+		turnAfterOppositePlays.push_back({ &samples[oppositeTurnPlaysI[i]].data.boardAfterPlay,samples[oppositeTurnPlaysI[i]].data.whoPlayed });
+	}
+
+	//we evaluate the final turn(first move was chosen with an exploration policy and exists in the replay buffer, second move played by opponent, third move played by original player and its evaluation gives us the next Q-Value)
+	auto finalRewards = m_makeMovesWithNN(turnAfterOppositePlays,m_targetNN);
+
+	for (size_t i = 0; i < turnAfterOppositePlaysI.size(); i++) {
+		futureRewards[turnAfterOppositePlaysI[i]] += m_discount*m_discount*finalRewards[i];
+	}
+	
+
+	//do the forward pass and backpropagation
+	std::vector<std::vector<float>> preparedFPGames;
+
+	for (auto &sample : originalSamples) {
+		preparedFPGames.push_back(getNumericRepresentationOfBoard(sample.data.boardAfterPlay,sample.data.whoPlayed));
+	}
+
+	m_nn->startRecording();
+	auto actualRewards=m_nn->forwardPassGPU(preparedFPGames);
+	m_nn->endRecording();
+	m_nn->selectAndDiscardRest(0,true);
+
+	std::vector<std::vector<float>> preparedBPErrors;
+	std::vector<float> trainingWieghts;
+	std::vector<float> newPriorities;
+	for (size_t i = 0; i < actualRewards.size(); i++) {
+		float error ;
+		newPriorities.push_back(std::abs(2 * (actualRewards[i][0] - futureRewards[i])));
+		preparedBPErrors.push_back({2*(actualRewards[i][0]- futureRewards[i])});
+		trainingWieghts.push_back(std::pow((m_replayBuffer.size() + originalSamples.size()) * originalSamples[i].prob, m_betaWeight));
+		/*
+		std::cout << samples[i].prob << " " << std::endl;
+		std::cout << m_replayBuffer.size() << " " << std::endl;
+		std::cout << samples[i].prob
+		*/
+	}
+
+	m_nn->backpropagateGPU(preparedBPErrors,trainingWieghts);
+
+	std::vector<std::pair<connectFourPlay, float>> preparedRBEntries;
+
+	std::vector<size_t> seenIDs;
+	for (size_t i = 0; i < newPriorities.size();i++) {
+		if (std::find(seenIDs.begin(),seenIDs.end(), originalSamples[i].id)!=seenIDs.end()) {
+			preparedRBEntries.push_back({ originalSamples[i].data, newPriorities[i] });
+			seenIDs.push_back(originalSamples[i].id);
+		}
+
+	}
+
+
+	m_replayBuffer.insert(preparedRBEntries);
+
+
+}
+
+void ConnectFourTest::setSaveFile(const std::string& name)
+{
+	m_savefile = name;
+}
+
+std::vector<float> ConnectFourTest::m_makeMovesWithNN(std::vector<std::pair<boardC4_t*,playerC4>> games, NeuralNetwork* nn, std::vector<std::vector<connectFourPlay> >* lines,bool highestTrueSampleFalse, bool backpropagationTraining, size_t ffBatchSize)
+{
+	if (games.empty()) {
+		return {};
+	}
+	if (nn == nullptr) {
+		nn = m_nn;
+	}
+
+	//final chosen rewards;
+	std::vector<float> retval(games.size(),0);
+	//first dimension is the original game, second dimension is the move
+	std::queue<std::queue<std::pair<boardC4_t,playerC4>> > allPossibleMoves;
+	std::vector<std::vector<boardC4_t>> allPossibleMovesCache;
+	for (auto &g : games) {
+		if (lines != nullptr) {
+			lines->push_back({});
+		}
+
+		auto pos = getPossibleMoves(*g.first, g.second);
+		allPossibleMoves.push({});
+		allPossibleMovesCache.push_back(pos);
+		for (auto &p : pos) {
+			allPossibleMoves.back().push({ p , g.second});
+		}
+		
+	}
+
+	if (backpropagationTraining) {
+		nn->startRecording();
+	}
+	//pair is for the reward first and the ID of the forward pass second.
+	std::vector<std::vector<std::pair<float, size_t>> > allRewards;
+	size_t  allGameN = 0;
+	while (!allPossibleMoves.empty()) {
+		size_t gameN = 0;
+		std::vector<std::vector<float>> boardReps;
+		std::vector<size_t> allPossibleMovesDim;
+		while (gameN < ffBatchSize && !allPossibleMoves.empty()) {
+
+			auto thisGame = allPossibleMoves.front();
+			allPossibleMoves.pop();
+			allPossibleMovesDim.push_back(0);
+			while (!thisGame.empty()) {
+				boardReps.push_back(getNumericRepresentationOfBoard(thisGame.front().first,thisGame.front().second));
+				thisGame.pop();
+				allPossibleMovesDim[allPossibleMovesDim.size()-1]++;
+				gameN++;
+				
+			}
+		}
+		
+
+		auto rewards = nn->forwardPassGPU(boardReps);
+
+		gameN = 0;
+		for (auto i : allPossibleMovesDim) {
+			allRewards.push_back({});
+			for (size_t o = 0; o < i; o++) {
+				allRewards.back().push_back({rewards[gameN][0],gameN + allGameN});
+				gameN++;
+			}
+		}
+		allGameN += gameN;
+	}
+
+
+
+	if (highestTrueSampleFalse) {
+		std::vector<size_t> toKeep;
+		for (size_t i = 0; i < allRewards.size(); i++) {
+			toKeep.push_back(allRewards[i][0].second);
+			float maxReward = allRewards[i][0].first;
+			unsigned int maxRewardIndex = 0;
+			for (size_t o = 0; o < allRewards[i].size(); o++) {
+				if (allRewards[i][o].first>maxReward) {
+					maxReward = allRewards[i][o].first;
+					maxRewardIndex = o;
+					toKeep[toKeep.size() - 1] = allRewards[i][o].second;
+				}
+
+				if (lines != nullptr) {
+					lines->at(i).push_back(connectFourPlay{allPossibleMovesCache[i][o],flipPlayerC4(getWhoToPlay(allPossibleMovesCache[i][o])),allRewards[i][o].first});
+				}
+
+			}
+			*games[i].first = allPossibleMovesCache[i][maxRewardIndex];
+			retval[i] = maxReward;
+
+		}
+		if (backpropagationTraining) {
+			if (!toKeep.empty()) {
+				nn->selectAndDiscardRest(toKeep);
+			}
+
+		}
+	}
+	//sample from probability distribution.
+	else{
+
+	}
+	if (lines != nullptr && false) {
+		//guaranteeing there is always a null line  that will be the only thing recorded when the board state is won or lost.
+		for (size_t i = 0; i < lines->size();i++) {
+			if (lines->at(i).empty()) {
+				if (winningMove(*games[i].first, (unsigned int)games[i].second)) {
+					lines->at(i).push_back({ *games[i].first , games[i].second,100 });
+				}
+				else if (winningMove(*games[i].first, (unsigned int)flipPlayerC4(games[i].second))) {
+					lines->at(i).push_back({ *games[i].first , games[i].second,-100 });
+				}
+				else {
+					lines->at(i).push_back({ *games[i].first , games[i].second,0 });
+				}
+			}
+
+
+		}
+	}
+
+
+
+	if (!backpropagationTraining) {
+		nn->endRecording();
+	}
+	return retval;
+
+	/*
 	//use softmax and probablity sampling to choose a move.
 	std::vector<float> ratings;
 
@@ -617,43 +1110,10 @@ void makeMoveWithNN(boardC4_t& game, NeuralNetwork* nn, playerC4 whoIsPlayed, bo
 	if (backpropagationTraining) {
 		nn->endRecording();
 	}
+	*/
 
 }
 
-
-
-
-gameConditionC4 matchTwoNNs(boardC4_t& game, NeuralNetwork* first, NeuralNetwork* second, std::vector < std::pair<float, unsigned int>  >* probasFirst, std::vector < std::pair<float, unsigned int>  >* probasSecond)
-{
-
-	playerC4 whoToPlay = getWhoToPlay(game);
-	while (true) {
-
-		std::pair<float, unsigned int> nextProba;
-		makeMoveWithNN(game, whoToPlay == playerC4::first ? first : second, whoToPlay, true, &nextProba, true);
-		if (whoToPlay == playerC4::first) {
-			probasFirst->push_back(nextProba);
-		}
-		else {
-			probasSecond->push_back(nextProba);
-		}
-
-
-		if (winningMove(game,(unsigned int) whoToPlay)) {
-			return whoToPlay == playerC4::first ? gameConditionC4::firstWon : gameConditionC4::secondWon;
-		}
-
-		if (getPossibleMoves(game,whoToPlay).empty()) {
-			return gameConditionC4::draw;
-		}
-
-
-		whoToPlay = whoToPlay == playerC4::first?playerC4::second:playerC4::first;
-	}
-
-	//should never reach this.
-	return gameConditionC4::playing;
-}
 
 
 #include <iostream>
@@ -661,247 +1121,75 @@ gameConditionC4 matchTwoNNs(boardC4_t& game, NeuralNetwork* first, NeuralNetwork
 
 
 
-void matchMakeThreadedOnce(MatchC4& match, std::vector<NeuralNetwork>& m_competitors, std::mutex& matchesLock, size_t epoch, size_t targetBatchSize = 512) {
-
-	matchesLock.lock();
-	auto &secondNN = m_competitors[match.second];
-	auto &firstNN = m_competitors[match.first];
-
-
-	boardC4_t& game = match.gameState;
-
-	std::vector<std::pair<float, unsigned int> > firstProbas;
-	std::vector<std::pair<float, unsigned int> > secondProbas;
-
-	gameConditionC4 cond = matchTwoNNs(game, &firstNN, &secondNN, &firstProbas, &secondProbas);
-
-
-	std::vector < std::vector<float> > costDerivFirst;
-
-	//-1 signals tie
-	float expectedFirst = -1;
-	float expectedSecond = -1;
-
-	if (cond == gameConditionC4::secondWon) {
-		expectedFirst = 0;
-		expectedSecond = 1;
-	}
-	else if (cond == gameConditionC4::firstWon) {
-		expectedFirst = 1;
-		expectedSecond = 0;
-	}
-
-	for (size_t i = 0; i < firstProbas.size(); i++) {
-		if (expectedFirst == -1) {
-			expectedFirst = 1 / firstProbas[i].second;
-		}
-		costDerivFirst.push_back({ (firstProbas[i].first - expectedFirst) });
-	}
-	//firstNN.backpropagateGPU(costDerivFirst);
-
-	
-	auto acc = firstNN.accumulateInstanceForBackprop(costDerivFirst);
-	if (acc >= targetBatchSize) {
-		firstNN.backpropagateGPU();
-	}
-	
-
-
-
-
-	std::vector < std::vector<float> > costDerivSecond;
-
-	for (size_t i = 0; i < secondProbas.size(); i++) {
-		if (expectedSecond == -1) {
-			expectedSecond = 1 / secondProbas[i].second;
-		}
-		costDerivSecond.push_back({ (secondProbas[i].first - expectedSecond) });
-	}
-
-	//secondNN.backpropagateGPU(costDerivSecond);
-
-	
-	auto acc2 = secondNN.accumulateInstanceForBackprop(costDerivSecond);
-	if (acc2 >= targetBatchSize) {
-		secondNN.backpropagateGPU();
-	}
-	
-
-
-	matchesLock.unlock();
-}
-
-
-void matchMakeThreaded(std::stack<MatchC4>& matches, std::vector<NeuralNetwork>& m_competitors, std::mutex& matchesLock, size_t epoch) {
-
-	//std::cout << "-";
-	while (true) {
-		MatchC4 thisMatch;
-		matchesLock.lock();
-		if (matches.empty()) {
-
-			matchesLock.unlock();
-			break;
-		}
-		else {
-			thisMatch = matches.top();
-
-			matches.pop();
-		}
-		matchesLock.unlock();
-
-
-		matchMakeThreadedOnce(thisMatch, m_competitors, matchesLock,epoch);
-	}
-}
-
-
-//multithreaded matchmaking currently does not work.
-void matchMake(std::vector<NeuralNetwork>& m_competitors, size_t epoch,size_t games,size_t m_maxThreads = 1){
-
-	//first is black and second is white
-	std::stack<MatchC4> matches;
-	std::vector<std::thread*> workers;
-
-	std::mutex matchesLock;
-
-	std::vector<boardC4_t> selectedGames;
-	for (size_t i = 0; i < games; i++) {
-		if (i%22==0) {
-			boardC4_t game;
-			initBoard(game);
-			selectedGames.push_back(game);
-		}
-		else {
-			std::uniform_int_distribution<unsigned int> unif(1, NUM_ROW*NUM_COL-1);
-			float random_val = unif(NNInitialization::engine);
-			selectedGames.push_back(sampleBoard(random_val));
-		}
-
-	}
-
-	//matches are made, care is taken to not match NNs against themselves.
-	for (size_t i = 0; i < m_competitors.size(); i++)
-	{
-		for (size_t o = i; o < m_competitors.size(); o++) {
-
-			if (i != o) {
-				for (size_t x = 0; x < 2; x++) {
-
-
-					auto black = x == 0 ? i : o;
-					auto white = x == 0 ? o : i;
-
-					for (auto game : selectedGames) {
-						matches.push(MatchC4{ black,white,game });
-					}
-
-
-
-				}
-			}
-
-		}
-	}
-	if (m_maxThreads != 1) {
-		for (size_t o = 0; o < m_maxThreads; o++) {
-			//matchMakeThread(matches,m_competitors,matchesLock,competitorsLock);
-			workers.push_back(new std::thread([&, o]() {matchMakeThreaded(matches, m_competitors, matchesLock, epoch); }));
-		}
-
-		for (size_t i = 0; i < workers.size(); i++) {
-			workers[i]->join();
-			delete workers[i];
-		}
-	}
-	else {
-		matchMakeThreaded(matches, m_competitors, matchesLock,epoch);
-	}
-
-	for (auto &comp : m_competitors) {
-		comp.backpropagateGPU();
-		comp.increaseEpoch();
-	}
-
-}
-
-
-
-
-
-boardC4_t ConnectFourTest::m_predictWithEnsemble(boardC4_t board, playerC4 p)
+ConnectFourTest::ConnectFourTest(Topology top)
 {
-
-	auto possibleMoves = getPossibleMoves(board, p);
-
-
-	std::vector<float> finalRatings(possibleMoves.size(), 0);
-	for (auto &nn:m_ensemble) {
-		std::vector<float> ratings(possibleMoves.size(), 0);
-		for (size_t i = 0; i < possibleMoves.size(); i++) {
-			auto inputVec = getNumericRepresentationOfBoard(possibleMoves[i], p);
-			ratings[i] = nn.forwardPassGPU({ inputVec })[0][0];
-		}
-		float e_sum = 0;
-		for (size_t i = 0; i < possibleMoves.size(); i++) {
-			e_sum += std::exp(ratings[i]);
-		}
-		for (size_t i = 0; i < ratings.size(); i++) {
-			ratings[i] = std::exp(ratings[i]) / e_sum;
-			finalRatings[i] += ratings[i];
-		}
-
-	}
-
-	float highestRating = 0;
-	unsigned int highestIndex = 0;
-	for (size_t i = 0; i < finalRatings.size(); i++) {
-		float thisProba = finalRatings[i]/m_ensemble.size();
-		if (thisProba > highestRating) {
-			highestIndex = i;
-			highestRating = thisProba;
-		}
-	}
-
-
-	return possibleMoves[highestIndex];
-}
-
-ConnectFourTest::ConnectFourTest(Topology top, size_t players)
-{
-	for (size_t i = 0; i < players; i++) {
-		m_ensemble.push_back(NeuralNetwork(top,NNInitialization(),LearningSchedule()));
-	}
+	m_nn = new NeuralNetwork(top,NNInitialization(),LearningSchedule());
+	m_nn->m_learningSched.learningRate = 0.00025;
+	m_nn->m_learningSched.constantLearningRate = true;
+	m_nn->m_learningSched.useWarmup = false;
+	m_targetNN = new NeuralNetwork(*m_nn);
 }
 
 
-void ConnectFourTest::train(size_t epochs, size_t games)
+void ConnectFourTest::train(size_t epochs, size_t afterTraining)
 {
+	size_t maxSubpasses = epochs * m_subpasses + afterTraining;
+	size_t totalSubpasses = 0;
+	size_t originalBetaWeight = m_betaWeight;
+	//size_t originalEpsilon = m_epsilon;
 	for (size_t i = 0; i < epochs; i++) {
 		std::cout << "epoch: " << i << std::endl;
-		matchMake(m_ensemble,i,games);
-		if (i%10 == 0) {
-			save("C4TEST");
+		//half the number of replay data as there are training passes of batch size, so that each new replay gets sampled once and then the whole buffer gets sampled randomly a few times
+		for (size_t o = 1; o < 42; o++) {
+			m_generateTrainingData(o, (((float)m_batchSize * m_subpasses) / 2)/41);
 		}
 
+		if (i%10 == 0) {
+			save();
+		}
+
+		for (size_t o = 0; o < m_subpasses; o++) {
+			m_trainOnce();
+			if (totalSubpasses % m_targetLag == 0) {
+				*m_targetNN = *m_nn;
+			}
+			m_betaWeight = originalBetaWeight + (totalSubpasses / maxSubpasses)*(1-originalBetaWeight);
+			totalSubpasses++;
+		}
+		//m_epsilon = originalEpsilon - float(i) / epochs;
+	}
+	for (size_t i = 0; i < afterTraining; i++) {
+		m_trainOnce();
+		if (totalSubpasses % m_targetLag == 0) {
+			*m_targetNN = *m_nn;
+		}
+		if (i%m_subpasses==0) {
+			std::cout << "new epoch" << std::endl;
+		}
+		m_betaWeight = originalBetaWeight + (totalSubpasses / maxSubpasses) * (1 - originalBetaWeight);
+		totalSubpasses++;
 	}
 }
 
 #include<sstream>
 
+#include <functional>
 
-typedef void (*evalFunc)(boardC4_t&,size_t,ConnectFourTest&);
+typedef std::function<void(boardC4_t&, size_t)> evalFunc;
+
+
 
 //
-std::array<size_t, 3> testOnce(std::stringstream &ss, evalFunc first, evalFunc second, ConnectFourTest& agent, size_t games, bool firstStarts) {
+std::array<size_t, 3> testOnce(std::stringstream &ss, evalFunc first, evalFunc second, size_t games, bool firstStarts, unsigned int toPrintLosses = 0) {
 	size_t draws = 0;
 	size_t wins = 0;
 	size_t losses = 0;
-
+	unsigned int printedLosses = 0;
 	for (size_t i = 0; i < games; i++) {
 		bool gameOver = false; // flag for if game is over
 		unsigned int turns = 0; // count for # turns
 		unsigned int currentPlayer = PLAYER; // current playerC4
+
 		if (!firstStarts) {
 			currentPlayer = COMPUTER;
 		}
@@ -912,23 +1200,28 @@ std::array<size_t, 3> testOnce(std::stringstream &ss, evalFunc first, evalFunc s
 		initBoard(board);
 
 		while (!gameOver) { // while no game over state
+			if (turns == NUM_ROW * NUM_COL) {
+				draws++;
+				break;
+			}
 			if (currentPlayer == COMPUTER) { // AI move
-				second(board,turns,agent);
+				second(board,turns);
 			}
 			else if (currentPlayer == PLAYER) { // playerC4 move
-				first(board,turns,agent);
+				first(board,turns);
 			}
-			else if (turns == NUM_ROW * NUM_COL) { // if max number of turns reached
-				gameOver = true;
-			}
+
 			gameOver = winningMove(board, currentPlayer); // check if playerC4 won
+
+			if (gameOver && currentPlayer == COMPUTER && printedLosses < toPrintLosses) {
+				printBoard(board);
+				printedLosses++;
+			}
+
 			currentPlayer = (currentPlayer == 1) ? 2 : 1; // switch playerC4
 			turns++; // iterate number of turns
 		}
-		if (turns == NUM_ROW * NUM_COL) { // if draw condition
-			draws++;
-		}
-		else { // otherwise, someone won
+		if (turns != NUM_ROW * NUM_COL-1) {
 			((currentPlayer == PLAYER) ? losses++ : wins++);
 		}
 	}
@@ -940,29 +1233,61 @@ std::array<size_t, 3> testOnce(std::stringstream &ss, evalFunc first, evalFunc s
 
 std::string ConnectFourTest::test(size_t games)
 {
-
+	using namespace std::placeholders;
 	std::stringstream ss;
 
+	//scenarios
+	boardC4_t scen1;
+	initBoard(scen1);
+	makeMove(scen1,1,PLAYER);
+	makeMove(scen1,3,COMPUTER);
+	makeMove(scen1,1,PLAYER);
+	makeMove(scen1,0,COMPUTER);
+	makeMove(scen1,1,PLAYER);
+	m_makeMovesWithNN({ {&scen1,playerC4::second} });
+	makeMove(scen1, 1, PLAYER);
+	ss << "scenario 1: " << (winningMove(scen1,PLAYER)?"FAILED":"PASSED") << std::endl;
+	if (m_tracking) {
+		std::cout << ss.str();
+	}
 
-	evalFunc second = [](boardC4_t &board, size_t turns, ConnectFourTest&) {
-		makeMove(board, aiMove(board, turns, 1), COMPUTER);
+	auto second = [](boardC4_t &board, size_t turns, size_t depth) {
+		auto move = aiMove(board, turns, depth);
+		makeMove(board, move, COMPUTER);
 	};
 	
-	evalFunc first = [](boardC4_t& board, size_t turns, ConnectFourTest &agent) {
-		board = agent.m_predictWithEnsemble(board, playerC4::first);
+	evalFunc first = [this](boardC4_t& board, size_t turns) {
+		
+		m_makeMoveWithDepthAndBreadth({ &board,playerC4::first },4,40);
+		//m_makeMovesWithNN({ {&board,playerC4::first} });
+		//m_minimaxNN({&board,playerC4::first },5,turns);
 	};
 
-	evalFunc randomStrat = [](boardC4_t& board, size_t turns, ConnectFourTest& agent) {
+	evalFunc randomStrat = [](boardC4_t& board, size_t turns) {
 		auto possibleBoards = getPossibleMoves(board, playerC4::second);
 		auto dist = std::uniform_int_distribution<size_t>(0, possibleBoards.size() - 1);
 		board = possibleBoards[dist(NNInitialization::engine)];
 		};
+
+	evalFunc randomStratFirst = [](boardC4_t& board, size_t turns) {
+		auto possibleBoards = getPossibleMoves(board, playerC4::first);
+		auto dist = std::uniform_int_distribution<size_t>(0, possibleBoards.size() - 1);
+		board = possibleBoards[dist(NNInitialization::engine)];
+		};
+	ss << "NN first, max depth 4";
+	auto Depth4 = testOnce(ss, first, std::bind(second,_1, _2, 4), games, true,1);
+	ss << "NN first, max depth 3";
+	auto Depth3 = testOnce(ss, first, std::bind(second,_1, _2, 3), games, true,1);
+	ss << "NN first, max depth 2";
+	auto Depth2 = testOnce(ss, first, std::bind(second,_1, _2, 2), games, true,1);
 	ss << "NN first, max depth 1";
-	auto Depth2 = testOnce(ss,first,second,*this,games,true);
+	auto Depth1 = testOnce(ss,first,std::bind(second,_1,_2,1), games, true,1);
 
 	ss << "NN first, random";
-	auto vsRandom = testOnce(ss,first,randomStrat,*this,games,true);
+	auto vsRandom = testOnce(ss,first,randomStrat,games,true);
 
+	ss << "Random vs Random control";
+	auto randomVsRandom = testOnce(ss, randomStratFirst, randomStrat, games, true);
 
 	return ss.str();
 }
@@ -971,33 +1296,74 @@ std::string ConnectFourTest::test(size_t games)
 
 
 
-ConnectFourTest::ConnectFourTest(std::vector<std::string> fileNames)
+ConnectFourTest::ConnectFourTest(std::string fileName)
 {
-	for (auto file:fileNames) {
-		std::ifstream NNFile;
-		NNFile.open(file);
+	std::ifstream NNFile;
+	NNFile.open(fileName);
 
 
 
-		std::stringstream buffer;
-		buffer << NNFile.rdbuf();
+	std::stringstream buffer;
+	buffer << NNFile.rdbuf();
 
-		m_ensemble.push_back(NeuralNetwork(buffer.str()));
-	}
+	m_nn = new NeuralNetwork(buffer.str());
 }
 
 
-void ConnectFourTest::save(std::string nameConv)
+void ConnectFourTest::save()
 {
-	for (size_t i = 0; i < m_ensemble.size(); i++) {
-		std::stringstream ss;
-		ss << nameConv << "_" << i << ".txt";
-		std::ofstream savefile(ss.str(), std::ios::trunc);
-		savefile << m_ensemble[i].serialize();
-	}
+	std::stringstream ss;
+	ss << m_savefile << ".txt";
+	std::ofstream savefile(ss.str(), std::ios::trunc);
+	savefile << m_nn->serialize();
 
 }
 
 void ConnectFourTest::play()
 {
+	evalFunc AI = [this](boardC4_t& board, size_t turns) {
+
+		//m_makeMoveWithDepthAndBreadth({ &board,playerC4::first }, 4, 40);
+		m_makeMovesWithNN({ {&board,playerC4::second} });
+		//m_minimaxNN({&board,playerC4::first },5,turns);
+	};
+
+	evalFunc player = [](boardC4_t& board, size_t turns) {
+		printBoard(board);
+		std::string moveString;
+		unsigned int move;
+		std::cout << "enter move: ";
+		std::cin >> moveString;
+		move = std::atoi(moveString.c_str());
+		makeMove(board, move, PLAYER);
+		};
+
+	std::stringstream ss;
+	testOnce(ss, player, AI, 1, true);
+
+
+}
+
+ConnectFourTest::~ConnectFourTest()
+{
+	delete m_nn;
+	if (m_targetNN != nullptr) {
+		delete m_targetNN;
+	}
+
+}
+
+bool connectFourPlay::operator<(const connectFourPlay& other)
+{
+	return reward < other.reward;
+}
+
+bool ConnectFourTest::C4PlayOGCandidate::operator<(const C4PlayOGCandidate& other)
+{
+	return play < other.play;
+}
+
+bool ConnectFourTest::C4PlayOGCandidate::operator>(const C4PlayOGCandidate& other)const
+{
+	return play.reward > other.play.reward;
 }

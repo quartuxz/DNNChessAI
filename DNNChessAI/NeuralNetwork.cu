@@ -255,7 +255,6 @@ NeuralNetwork::NeuralNetwork(NeuralNetwork &other):
 	m_top(other.m_top),
 	m_batchN(other.m_batchN)
 {
-	std::cout << "USED NN COPY CONSTRUCTOR!" << std::endl;
 	other.m_updateRAM();
 	m_hiddenLayers = other.m_hiddenLayers;
 	m_outputLayer = other.m_outputLayer;
@@ -271,7 +270,7 @@ NeuralNetwork& NeuralNetwork::operator=(NeuralNetwork other)
 
 
 
-__global__ void calculateZErrorKernel(float **thisZError, float *thisBiasAcc,  float **thisZ, float **thisA, float **nextZError,  const float *weightMatrix, const unsigned int* extraParamsThisLayer, const unsigned int *extraParamsNextLayer)
+__global__ void calculateZErrorKernel(float **thisZError, float *thisBiasAcc,  float **thisZ, float **thisA, float **nextZError,  const float *weightMatrix, const unsigned int* extraParamsThisLayer, const unsigned int *extraParamsNextLayer, const float *trainingWeights)
 {
 	int instance = blockIdx.y;
 	int neuron = threadIdx.x + blockDim.x * blockIdx.x;
@@ -285,30 +284,33 @@ __global__ void calculateZErrorKernel(float **thisZError, float *thisBiasAcc,  f
 			errorWeightSum += weightMatrix[neuron + matrixWidth * i]*nextZError[instance][i];
 		}
 		float deriv = 0;
-		//if (extraParamsThisLayer[0] == 2) {
+		if (extraParamsThisLayer[0] == 2) {
 
-		//	deriv = thisA[instance][neuron] * (1 - thisA[instance][neuron]);
-		//}
-		//else if (extraParamsThisLayer[0] == 3) {
+			deriv = thisA[instance][neuron] * (1 - thisA[instance][neuron]);
+		}
+		else if (extraParamsThisLayer[0] == 1) {
+			deriv = 1;
+		}
+		else if (extraParamsThisLayer[0] == 3) {
 			float sigmoid = 1 / (1 + exp(-thisZ[instance][neuron]));
 			deriv = thisA[instance][neuron]+ sigmoid *(1-thisA[instance][neuron]);
-		//}
+		}
 
 
 		thisZError[instance][neuron] = errorWeightSum * deriv;
 
 
 
-		atomicAdd(thisBiasAcc+neuron, thisZError[instance][neuron]);
+		atomicAdd(thisBiasAcc+neuron, thisZError[instance][neuron]*trainingWeights[instance]);
 	}
 }
 
-__global__ void calculateWeightGradientsKernel(float *weightMatrixAcc, float **thisZError, float **prevA, const unsigned int *extraParams) {
+__global__ void calculateWeightGradientsKernel(float *weightMatrixAcc, float **thisZError, float **prevA, const unsigned int *extraParams, const float *trainingWeights) {
 	int instance = blockIdx.y;
 	int neuron = threadIdx.x + blockDim.x * blockIdx.x;
 	if (neuron < extraParams[2]) {
 		for (size_t i = 0; i < extraParams[1]; i++) {
-			atomicAdd(weightMatrixAcc+ i + neuron * extraParams[1], prevA[instance][i] * thisZError[instance][neuron]);
+			atomicAdd(weightMatrixAcc+ i + neuron * extraParams[1], prevA[instance][i] * thisZError[instance][neuron]*trainingWeights[instance]);
 		}
 	}
 }
@@ -343,14 +345,20 @@ size_t NeuralNetwork::getEpoch() const
 	return m_epoch;
 }
 
-void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, size_t numberOfStreams)
+void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, std::vector<float> trainingWeights)
 {
+
+
+
 
 	m_instancesInBatch = 0;
 
 
 	if (dCost_dOutput_forInstances.empty()) {
 		return;
+	}
+	if (trainingWeights.empty()) {
+		trainingWeights = std::vector<float>(dCost_dOutput_forInstances.size(),1);
 	}
 
 	std::vector<float*> weightAcc;
@@ -411,7 +419,9 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 		delete[] biases;
 	}
 
-
+	float* trainingWeightsGPU = 0;
+	CUDA_CHECK(cudaMalloc((void**)&trainingWeightsGPU,trainingWeights.size()*sizeof(float)));
+	CUDA_CHECK(cudaMemcpy(trainingWeightsGPU,trainingWeights.data(), trainingWeights.size() * sizeof(float),cudaMemcpyHostToDevice));
 	
 	//first axis is layer second axis is instance, third axis is neuron.
 	std::vector<float**> dCost_dErrorL;
@@ -491,7 +501,7 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 		// Launch a kernel on the GPU with one thread for each element.
 		//accumulate biases for this instance
 		//std::cout << "Layer: " << o << "." << std::endl;
-		calculateZErrorKernel <<< dimGrid, threadSizeX >>> (dCost_dErrorL.back(), biasAcc[o], savedZValuesInstanceGPU, savedAValuesInstanceGPU, nextZError, std::get<0>(m_GPULayers[o + 1]), std::get<2>(m_GPULayers[o]), std::get<2>(m_GPULayers[o + 1]));
+		calculateZErrorKernel <<< dimGrid, threadSizeX >>> (dCost_dErrorL.back(), biasAcc[o], savedZValuesInstanceGPU, savedAValuesInstanceGPU, nextZError, std::get<0>(m_GPULayers[o + 1]), std::get<2>(m_GPULayers[o]), std::get<2>(m_GPULayers[o + 1]), trainingWeightsGPU);
 
 		// Check for any errors launching the kernel
 		cudaStatus = cudaGetLastError();
@@ -513,7 +523,7 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 
 
 		//accumulate weights for this instance
-		calculateWeightGradientsKernel <<< dimGrid, threadSizeX >>> (weightAcc[o], dCost_dErrorL.back(), savedAValuesInstanceGPU2, std::get<2>(m_GPULayers[o]));
+		calculateWeightGradientsKernel <<< dimGrid, threadSizeX >>> (weightAcc[o], dCost_dErrorL.back(), savedAValuesInstanceGPU2, std::get<2>(m_GPULayers[o]),trainingWeightsGPU);
 
 		// Check for any errors launching the kernel
 		cudaStatus = cudaGetLastError();
@@ -560,6 +570,8 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 		const Layer* layer = (i < m_hiddenLayers.size() ? &m_hiddenLayers[i] : &m_outputLayer);
 		unsigned int blockSize = std::max((unsigned int)std::ceilf(layer->size / THREADS_PER_BLOCK), (unsigned int)1);
 		unsigned int threadSize = std::min((size_t)THREADS_PER_BLOCK, layer->size);
+
+
 		addAverageWeightsAndBiasesKernel <<< blockSize, threadSize >>> (std::get<0>(m_GPULayers[i]), weightAcc[i], std::get<1>(m_GPULayers[i]), biasAcc[i], instancesAndLearningRateGPU, std::get<2>(m_GPULayers[i]), std::get<0>(m_GPUMomentum[i]), std::get<1>(m_GPUMomentum[i]));
 		// Check for any errors launching the kernel
 		cudaStatus = cudaGetLastError();
@@ -575,7 +587,7 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 			fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addAverageAndBiasesKernel!\n", cudaStatus);
 			system("pause");
 		}
-		
+
 	}
 
 	delete instancesAndLearningRate;
@@ -591,11 +603,20 @@ void NeuralNetwork::backpropagateGPU(std::vector<std::vector<float>>& dCost_dOut
 
 	clearTrainingData();
 	m_batchN++;
+
+	m_updateRAM();
+
+#ifdef NDEBUG
+	// nondebug
+#else
+	// debug code
+#endif
+
 }
 
-void NeuralNetwork::backpropagateGPU( size_t numberOfStreams)
+void NeuralNetwork::backpropagateGPU()
 {
-	backpropagateGPU(m_accumulatedInstancesForBP,numberOfStreams);
+	backpropagateGPU(m_accumulatedInstancesForBP);
 
 }
 
@@ -610,6 +631,35 @@ void NeuralNetwork::endRecording()
 	m_instanceN = 0;
 	m_recording = false;
 
+}
+
+void NeuralNetwork::selectAndDiscardRest(std::vector<size_t> selected) {
+	m_instancesInBatch += selected.size();
+	for (auto i : selected) {
+		m_savedAValues.push_back(m_intermediateAValues[i]);
+		m_savedZValues.push_back(m_intermediateZValues[i]);
+	}
+
+
+	for (size_t i = 0; i < m_intermediateAValues.size(); i++) {
+		if (std::count(selected.begin(),selected.end(),i)>0) {
+			for (auto val : m_intermediateAValues[i]) {
+				CUDA_CHECK(cudaFree(val));
+			}
+		}
+	}
+	for (size_t i = 0; i < m_intermediateZValues.size(); i++) {
+		if (std::count(selected.begin(), selected.end(), i)>0) {
+			for (auto val : m_intermediateZValues[i]) {
+				CUDA_CHECK(cudaFree(val));
+			}
+		}
+	}
+
+
+
+	m_intermediateAValues.clear();
+	m_intermediateZValues.clear();
 }
 
 void NeuralNetwork::selectAndDiscardRest(unsigned int selected, bool selectAll)
@@ -728,7 +778,7 @@ void NeuralNetwork::m_updateGPUMem()
 		float* weights = new float[allWeightsSize];
 		float* biases = new float[layer->size];
 		unsigned int* extraParams = new unsigned int[3];
-		extraParams[0] = (unsigned int)m_act.actType;
+		extraParams[0] = (unsigned int)layer->act.actType;
 		extraParams[1] = (unsigned int)layer->prevSize;
 		extraParams[2] = (unsigned int)layer->size;
 
@@ -821,23 +871,34 @@ __global__ void forwardPassLayerKernel(float* zValues, float* VecOut, float* Vec
 		for (size_t i = 0; i < extraParams[1]; i++) {
 			sum += weights[i + neuronAbs * extraParams[1]] * VecIn[i + blockIdx.y * inputLayerSize];
 		}
-		zValues[neuron] = sum + biases[neuronAbs];
+		float sumAndBias = sum + biases[neuronAbs];
+
+
+		zValues[neuron] = sumAndBias;
+
 		if (extraParams[0] == 1) {
-			VecOut[neuron] = sum + biases[neuronAbs];
+			VecOut[neuron] = sumAndBias;
 		}
 		else if (extraParams[0] == 2) {
-			float z = sum + biases[neuronAbs];
-			VecOut[neuron] = 1 / (1 + exp(-z));
+			VecOut[neuron] = 1 / (1 + exp(-sumAndBias));
 		}
 		else if (extraParams[0] == 3) {
-			float z = sum + biases[neuronAbs];
-			VecOut[neuron] = z * (1 / (1 + exp(-z)));
+			VecOut[neuron] = sumAndBias * (1 / (1 + exp(-sumAndBias)));
+			/*
+			if (VecOut[neuron] == -0.0f) {
+				printf("%d %f %f \n", layerSize, sumAndBias, exp(-sumAndBias));
+			}
+			*/
 		}
 	}
 }
 
-std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<std::vector<float>>& input, size_t numberOfStreams) const
+std::vector<std::vector<float>> NeuralNetwork::forwardPassGPU(const std::vector<std::vector<float>>& input) const
 {
+
+	if (input.empty()) {
+		return std::vector<std::vector<float>>();
+	}
 
 	for (auto in : input) {
 		if (m_top[0] != in.size()) {
@@ -1080,7 +1141,7 @@ NeuralNetwork::~NeuralNetwork()
 
 void NNInitialization::seedEngine()
 {
-	engine.seed();
+	engine.seed(time(NULL));
 }
 
 float NNInitialization::generateRandomNumber(float fan)
@@ -1133,14 +1194,16 @@ Layer::Layer(NNInitialization& init, size_t p_size, size_t p_prevSize, bool p_is
 		}
 	}
 	if (isOutput) {
-		biases = std::vector<float>(size, 0.0f);
 		act = NNActivation(activationType::linear);
+		//biases = std::vector<float>(size,0);
 	}
-	else {
+	//else {
+
 		for (size_t i = 0; i < size; i++) {
 			biases.push_back(init.generateRandomNumber(p_prevSize));
 		}
-	}
+	//}
+
 }
 
 Layer::Layer():

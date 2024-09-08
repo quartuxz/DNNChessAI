@@ -144,20 +144,21 @@ public:
 	size_t getEpoch()const;
 
 	//numberOfStreams is the synchronization upper bound not the exact value
-	void backpropagateGPU(std::vector<std::vector<float>> &dCost_dOutput_forInstances, size_t numberOfStreams = 64);
+	void backpropagateGPU(std::vector<std::vector<float>>& dCost_dOutput_forInstances, std::vector<float> trainingWeights = {});
 	//uses saved values for each instance
-	void backpropagateGPU(size_t numberOfStreams = 64);
+	void backpropagateGPU();
 	void startRecording();
 	void endRecording();
 	//select a specific training instance recorded between startRecording and endRecording to be saved.
 	void selectAndDiscardRest(unsigned int selected, bool selectAll = false);
+	void selectAndDiscardRest(std::vector<size_t> selected);
 	void clearTrainingData();
 
 	//only works when testing, cannot save training values.
 	std::vector<float> forwardPassCPU(const std::vector<float> &input);
 	//receives a batch of inputs, passes them through the entire neural net, and gets a batch of outputs.
 	//numberOfStreams is the synchronization upper bound not the exact value
-	std::vector<std::vector<float>> forwardPassGPU(const std::vector<std::vector<float>> &input, size_t numberOfStreams = 128)const;
+	std::vector<std::vector<float>> forwardPassGPU(const std::vector<std::vector<float>> &input)const;
 
 
 	std::string serialize();

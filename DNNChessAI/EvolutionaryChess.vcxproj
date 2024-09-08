@@ -65,6 +65,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;WIN64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <LanguageStandard>Default</LanguageStandard>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -91,11 +92,13 @@
     <ClInclude Include="NeuralNetworkTests.cuh" />
     <ClInclude Include="NNManager.cuh" />
     <ClInclude Include="RealGameSampler.cuh" />
+    <ClInclude Include="SamplingVector.h" />
     <ClInclude Include="TextUIChess.cuh" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ChessGame.cu" />
     <ClCompile Include="ConnectFourTest.cpp" />
+    <ClCompile Include="DefsAndUtils.cpp" />
     <ClCompile Include="EvolutionaryAlgorithmChess.cu" />
     <ClCompile Include="MatchMaker.cu" />
     <CudaCompile Include="NeuralNetwork.cu">
@@ -105,6 +108,7 @@
     <ClCompile Include="NeuralNetworkTests.cu" />
     <ClCompile Include="NNManager.cu" />
     <ClCompile Include="RealGameSampler.cu" />
+    <ClCompile Include="SamplingVector.cpp" />
     <ClCompile Include="TextUIChess.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

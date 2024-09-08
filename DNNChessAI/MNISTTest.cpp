@@ -56,7 +56,7 @@ std::vector<std::vector<float>> MNISTTest::m_forwardPropagate(std::vector<instan
 		}
 
 	}
-	std::vector<std::vector<float>> result = m_dense.forwardPassGPU(floatInRep,std::min(insts.size(),size_t(64)));
+	std::vector<std::vector<float>> result = m_dense.forwardPassGPU(floatInRep);
 
 
 	for (size_t o = 0; o < result.size(); o++) {
